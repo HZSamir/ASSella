@@ -19,7 +19,7 @@ ASSELLA_RAW_BASE="https://raw.githubusercontent.com/${ASSELLA_GH_OWNER}/${ASSELL
 ASSELLA_API_RELEASES="https://api.github.com/repos/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}/releases"
 ASSELLA_RELEASES_BASE="https://github.com/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}/releases/download"
 # Bump when changing installer behavior (visible in logs to confirm curl fetched latest script)
-ASSELLA_INSTALLER_REV="2026-03-20-pip-no-git-v2"
+ASSELLA_INSTALLER_REV="2026-03-20-sls-extract-v3"
 # Pinned VCS deps (must match requirements.in) — installed via zip when git is unavailable
 ASSELLA_VDF_GIT_ARCHIVE="https://github.com/solsticegamestudios/vdf/archive/refs/tags/v4.0.zip"
 ASSELLA_STEAM_GIT_ARCHIVE="https://github.com/solsticegamestudios/steam/archive/1373e885f26bb636225443787f54d4082283e5f3.zip"
@@ -606,6 +606,102 @@ verify_sls_elf_arch() {
     return 0
 }
 
+resolve_slssteam_7z_tool() {
+    if command -v 7z &>/dev/null; then
+        printf '%s\n' 7z
+        return 0
+    fi
+    if command -v 7za &>/dev/null; then
+        printf '%s\n' 7za
+        return 0
+    fi
+    if command -v 7zz &>/dev/null; then
+        printf '%s\n' 7zz
+        return 0
+    fi
+
+    local tools="${INSTALL_DESTINATION}/tools"
+    local bundled="${tools}/7zz"
+    if [ -x "$bundled" ]; then
+        printf '%s\n' "$bundled"
+        return 0
+    fi
+
+    local arch zarch=""
+    arch="$(uname -m)"
+    case "$arch" in
+        aarch64|arm64) zarch="arm64" ;;
+        x86_64|amd64) zarch="x64" ;;
+        *)
+            echo -e "${RED}[ERROR] No 7z/7zz found and cannot bundle 7zz for arch: $arch${NC}" >&2
+            return 1
+            ;;
+    esac
+
+    local ver="2409"
+    local url="https://github.com/ip7z/7zip/releases/download/24.09/7z${ver}-linux-${zarch}.tar.xz"
+    echo -e "${YELLOW}[INFO] Downloading portable 7zz (no system p7zip detected)...${NC}"
+    mkdir -p "$tools"
+    local tarball
+    tarball="$(mktemp -t assella-7zz-XXXXXX.tar.xz)"
+    if ! curl -fsSL --retry 3 "$url" -o "$tarball"; then
+        rm -f "$tarball"
+        echo -e "${RED}[ERROR] Could not download 7zz. Install p7zip (package 7z) and re-run.${NC}" >&2
+        return 1
+    fi
+    if ! tar -xJf "$tarball" -C "$tools" 7zz 2>/dev/null; then
+        tar -xJf "$tarball" -C "$tools" || {
+            rm -f "$tarball"
+            echo -e "${RED}[ERROR] Failed to unpack portable 7zz.${NC}" >&2
+            return 1
+        }
+    fi
+    rm -f "$tarball"
+    chmod +x "$bundled" 2>/dev/null || true
+    if [ ! -x "$bundled" ]; then
+        echo -e "${RED}[ERROR] Portable 7zz bootstrap failed.${NC}" >&2
+        return 1
+    fi
+    printf '%s\n' "$bundled"
+}
+
+extract_slssteam_archive() {
+    local archive="$1"
+    local dest="$2"
+    local tool
+    tool="$(resolve_slssteam_7z_tool)" || return 1
+    mkdir -p "$dest"
+    if ! "$tool" x -y "$archive" "-o${dest}" >/dev/null 2>&1; then
+        echo -e "${RED}[ERROR] Failed to extract SLSsteam .7z (using: $tool).${NC}"
+        return 1
+    fi
+    return 0
+}
+
+install_slssteam_binaries_from_tree() {
+    local tree="$1"
+    local sls_dir="$2"
+    local so inj
+    so="$(find "$tree" -name 'SLSsteam.so' -type f 2>/dev/null | head -n1)"
+    inj="$(find "$tree" -name 'library-inject.so' -type f 2>/dev/null | head -n1)"
+    if [ -z "$so" ] || [ -z "$inj" ]; then
+        echo -e "${RED}[ERROR] SLSsteam archive did not contain SLSsteam.so and library-inject.so.${NC}"
+        echo -e "${YELLOW}[INFO] Extract tree sample:${NC}"
+        find "$tree" -type f 2>/dev/null | head -n 25 | sed 's/^/  /' || true
+        return 1
+    fi
+    local payload_dir
+    payload_dir="$(dirname "$so")"
+    rm -rf "$sls_dir"
+    mkdir -p "$sls_dir"
+    cp -a "$payload_dir"/. "$sls_dir/"
+    if [ ! -f "$sls_dir/SLSsteam.so" ] || [ ! -f "$sls_dir/library-inject.so" ]; then
+        echo -e "${RED}[ERROR] SLSsteam binaries missing after install to $sls_dir${NC}"
+        return 1
+    fi
+    return 0
+}
+
 install_sls_lua_plugins() {
     local cfg_dir="$HOME/.config/SLSsteam"
     local plugins_dir="$cfg_dir/plugins"
@@ -634,6 +730,10 @@ install_sls_lua_plugins() {
 
 install_slssteam_minimal() {
     echo -e "\n${CYAN}${BOLD}=== SLSsteam install (DroidDeck-safe, no Steam updater) ===${NC}"
+    echo -e "${CYAN}[INFO] ASSella installer rev: ${ASSELLA_INSTALLER_REV}${NC}"
+    if [ "$(id -u)" -eq 0 ]; then
+        echo -e "${YELLOW}[WARN] Running as root installs under /root. Use the same user account that runs Steam.${NC}"
+    fi
 
     local sls_dir="$HOME/.local/share/SLSsteam"
     local cfg_dir="$HOME/.config/SLSsteam"
@@ -670,30 +770,27 @@ install_slssteam_minimal() {
         return 1
     fi
 
-    local extract_ok=false
-    if command -v 7z &>/dev/null; then
-        7z x -y SLSsteam-Any.7z -o"$dl_dir/extracted" >/dev/null && extract_ok=true
-    elif command -v 7za &>/dev/null; then
-        7za x -y SLSsteam-Any.7z -o"$dl_dir/extracted" >/dev/null && extract_ok=true
-    elif command -v bsdtar &>/dev/null; then
-        mkdir -p "$dl_dir/extracted"
-        bsdtar -xf SLSsteam-Any.7z -C "$dl_dir/extracted" && extract_ok=true
-    fi
-    if [[ "$extract_ok" != true ]]; then
-        echo -e "${RED}[ERROR] Install 7z, p7zip, or bsdtar to extract SLSsteam.${NC}"
+    local extract_root="$dl_dir/extracted"
+    mkdir -p "$extract_root"
+    if ! extract_slssteam_archive SLSsteam-Any.7z "$extract_root"; then
         return 1
     fi
 
     echo -e "${YELLOW}[INFO] Installing SLSsteam into $sls_dir...${NC}"
-    rm -rf "$sls_dir"
-    mkdir -p "$sls_dir"
-    if [ -d "$dl_dir/extracted" ]; then
-        cp -a "$dl_dir/extracted"/* "$sls_dir/" 2>/dev/null || cp -a "$dl_dir/extracted/." "$sls_dir/"
+    if ! install_slssteam_binaries_from_tree "$extract_root" "$sls_dir"; then
+        return 1
     fi
-    if [ -f "$dl_dir/extracted/res/config.yaml" ]; then
+
+    local res_cfg=""
+    if [ -f "$sls_dir/res/config.yaml" ]; then
+        res_cfg="$sls_dir/res/config.yaml"
+    else
+        res_cfg="$(find "$extract_root" -path '*/res/config.yaml' -type f 2>/dev/null | head -n1)"
+    fi
+    if [ -n "$res_cfg" ] && [ -f "$res_cfg" ]; then
         mkdir -p "$cfg_dir"
         if [ ! -s "$cfg_dir/config.yaml" ]; then
-            cp -a "$dl_dir/extracted/res/config.yaml" "$cfg_dir/config.yaml"
+            cp -a "$res_cfg" "$cfg_dir/config.yaml"
         fi
     fi
 

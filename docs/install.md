@@ -170,6 +170,15 @@ SLS only (reinstall without touching the app):
 curl -fsSL https://raw.githubusercontent.com/HZSamir/ASSella/beta/install.sh | bash -s -- --sls-only
 ```
 
+Confirm the script revision in the log line `ASSella installer rev:` (should be `2026-03-20-sls-extract-v3` or newer). Verify binaries (not only `~/.config/SLSsteam/config.yaml`):
+
+```bash
+ls -la ~/.local/share/SLSsteam/SLSsteam.so ~/.local/share/SLSsteam/library-inject.so
+file ~/.local/share/SLSsteam/SLSsteam.so
+```
+
+Run the installer as the **same user that runs Steam** (not `root`), so paths land under that user’s `$HOME`.
+
 ### After install
 
 - Launch **ASSella** from the KDE app menu or run `~/.local/share/ACCELA/run-assella.sh`.
