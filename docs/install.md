@@ -195,7 +195,7 @@ steam-sls
 - No `sudo` / full-system `pacman -Syu` — the installer is user-space only.
 - **`git` is not required** on DroidDeck: the installer downloads a GitHub source tarball with `curl` and `tar` only.
 - You need **`curl`**, **`tar`**, and **`python3`** (plus `unzip` or `7z` for SLSsteam install).
-- Upstream `SLSsteam-Any-release.7z` may be **x86_64-only**; native ARM64 Steam needs **aarch64** SLS builds (see [droiddeck-spike.md](./droiddeck-spike.md)). The installer warns when ELF architectures do not match.
+- Upstream SLSsteam is **32-bit Intel (i386)**, not ARM64 — it **cannot** inject into DroidDeck’s default ARM64 Steam. Use the **x86-64 Steam client** + `~/.local/bin/steam-sls` ([SLSsteam on DroidDeck](./droiddeck-spike.md#slssteam-on-droiddeck)). There is no official **aarch64** SLS build yet.
 - x86_64 AppImages are not supported on DroidDeck desktop.
 
 ---

@@ -19,7 +19,7 @@ ASSELLA_RAW_BASE="https://raw.githubusercontent.com/${ASSELLA_GH_OWNER}/${ASSELL
 ASSELLA_API_RELEASES="https://api.github.com/repos/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}/releases"
 ASSELLA_RELEASES_BASE="https://github.com/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}/releases/download"
 # Bump when changing installer behavior (visible in logs to confirm curl fetched latest script)
-ASSELLA_INSTALLER_REV="2026-03-20-7zz-stdout-v5"
+ASSELLA_INSTALLER_REV="2026-03-20-droiddeck-sls-guide-v6"
 # Pinned VCS deps (must match requirements.in) — installed via zip when git is unavailable
 ASSELLA_VDF_GIT_ARCHIVE="https://github.com/solsticegamestudios/vdf/archive/refs/tags/v4.0.zip"
 ASSELLA_STEAM_GIT_ARCHIVE="https://github.com/solsticegamestudios/steam/archive/1373e885f26bb636225443787f54d4082283e5f3.zip"
@@ -623,7 +623,7 @@ verify_sls_elf_arch() {
             if [[ "$arch_so" != *"ARM aarch64"* ]] && [[ "$arch_so" != *"aarch64"* ]]; then
                 echo -e "${RED}${BOLD}[WARN] SLSsteam.so architecture mismatch for $host:${NC}"
                 echo -e "  $arch_so"
-                echo -e "${YELLOW}Native ARM64 Steam cannot load x86_64 SLSsteam. See docs/droiddeck-spike.md${NC}"
+                echo -e "${YELLOW}Native ARM64 Steam cannot load Intel (i386/x86_64) SLSsteam.${NC}"
                 return 1
             fi
             ;;
@@ -765,12 +765,27 @@ verify_slssteam_install_layout() {
     return 0
 }
 
+print_droiddeck_sls_arch_mismatch_help() {
+    echo -e "\n${RED}${BOLD}=== SLSsteam cannot inject into native ARM64 Steam ===${NC}"
+    echo -e "${YELLOW}Upstream AceSLS releases are 32-bit Intel (i386), not ARM64. The installer placed files correctly, but${NC}"
+    echo -e "${YELLOW}LD_AUDIT injection only works when the Steam process matches that architecture.${NC}\n"
+    echo -e "${CYAN}${BOLD}On DroidDeck — use the x86-64 Steam client (FEX):${NC}"
+    echo -e "  1. Install/run as the ${BOLD}same user as Steam${NC} (not root)."
+    echo -e "  2. In Steam: ${BOLD}Settings → Steam client → x86-64${NC} (not ARM64). Fully quit Steam."
+    echo -e "  3. Start Steam with SLS: ${GREEN}\${HOME}/.local/bin/steam-sls${NC}"
+    echo -e "  4. Verify: ${BOLD}test -S /tmp/SLSsteam.API${NC} and ASSella Health → SLSsteam Online."
+    echo -e "\n${YELLOW}There is no official aarch64 SLSsteam build yet (AceSLS/SLSsteam#161).${NC}"
+    echo -e "If injection still fails on the x86-64 client, watch AceSLS/SLSsteam#94 (64-bit SLS) and ask in DroidDeck Discord."
+    echo -e "Details: ${ASSELLA_RAW_BASE}/${ASSELLA_INSTALL_BRANCH}/docs/droiddeck-spike.md#slssteam-on-droiddeck"
+    echo -e "\n${CYAN}Without working SLS:${NC} Hubcap depot / direct downloads still work; native Steam handoff stays disabled."
+}
+
 print_steam_sls_usage() {
     if [ ! -x "$STEAM_SLS_WRAPPER" ]; then
         return 1
     fi
     ensure_local_bin_in_path
-    echo -e "${GREEN}[OK] SLSsteam binaries installed.${NC}"
+    echo -e "${GREEN}[OK] SLSsteam binaries installed and compatible with this CPU.${NC}"
     echo -e "Restart Steam with:"
     echo -e "  ${GREEN}${STEAM_SLS_WRAPPER}${NC}"
     if command -v steam-sls &>/dev/null; then
@@ -879,7 +894,12 @@ install_slssteam_minimal() {
         return 1
     fi
     write_steam_sls_wrapper || return 1
-    verify_sls_elf_arch || true
+    if ! verify_sls_elf_arch; then
+        if [[ "${IS_ARM64:-false}" = true ]]; then
+            print_droiddeck_sls_arch_mismatch_help
+            return 1
+        fi
+    fi
 
     HEADCRAB_INSTALLED=true
     SLS_CONFIG_DIR="$cfg_dir"

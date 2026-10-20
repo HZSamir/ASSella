@@ -293,10 +293,17 @@ def create_sls_tab(dialog) -> QWidget:
     from core.native_steam.sls_preflight import sls_binaries_compatible, sls_binaries_present
     if is_arm64() and not (sls_binaries_present() and sls_binaries_compatible()):
         os_name = "DroidDeck" if is_droiddeck() else ("Armada OS" if is_armada_os() else "ARM64 Linux")
+        droid_hint = (
+            " On DroidDeck, also switch Steam to the <b>x86-64 client</b> (Settings → Steam client), "
+            "then start Steam with <code>~/.local/bin/steam-sls</code> — upstream SLS is i386, not ARM64."
+            if is_droiddeck()
+            else ""
+        )
         arm_badge = QLabel(
             f"ℹ️ <b>{os_name} (ARM64)</b>: Compatible SLSsteam binaries were not detected. "
-            "Use <b>Install SLSsteam</b> below (DroidDeck-safe installer). Until aarch64 SLS is installed, "
-            "ASSella can still use <b>Direct Depot Downloads</b> and local manifest management."
+            "Use <b>Install SLSsteam</b> below (DroidDeck-safe installer)."
+            f"{droid_hint} Until injection works, ASSella can still use "
+            "<b>Direct Depot Downloads</b> and local manifest management."
         )
         arm_badge.setStyleSheet(
             "background-color: rgba(64, 150, 255, 0.15); border: 1px solid rgba(64, 150, 255, 0.4); "

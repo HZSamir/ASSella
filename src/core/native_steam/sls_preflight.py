@@ -83,8 +83,9 @@ def sls_binary_arch_mismatch_message() -> str:
     em_name = {62: "x86-64", 183: "aarch64", 3: "i386"}.get(so_em or -1, "unknown")
     return (
         f"SLSsteam at {so_path} is built for {em_name}, but this system is {host}. "
-        "Native ARM64 Steam cannot load x86_64 SLSsteam. Use an aarch64 SLS build, "
-        "or DroidDeck's x86_64 Steam client under FEX with x86 SLS."
+        "Native ARM64 Steam cannot load Intel SLSsteam (i386/x86-64). "
+        "On DroidDeck: Steam Settings → Steam client → x86-64, quit Steam, then run "
+        "~/.local/bin/steam-sls. There is no official aarch64 SLS build yet (AceSLS#161)."
     )
 
 
