@@ -19,7 +19,7 @@ ASSELLA_RAW_BASE="https://raw.githubusercontent.com/${ASSELLA_GH_OWNER}/${ASSELL
 ASSELLA_API_RELEASES="https://api.github.com/repos/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}/releases"
 ASSELLA_RELEASES_BASE="https://github.com/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}/releases/download"
 # Bump when changing installer behavior (visible in logs to confirm curl fetched latest script)
-ASSELLA_INSTALLER_REV="2026-03-20-sls-extract-v3"
+ASSELLA_INSTALLER_REV="2026-03-20-sls-path-v4"
 # Pinned VCS deps (must match requirements.in) — installed via zip when git is unavailable
 ASSELLA_VDF_GIT_ARCHIVE="https://github.com/solsticegamestudios/vdf/archive/refs/tags/v4.0.zip"
 ASSELLA_STEAM_GIT_ARCHIVE="https://github.com/solsticegamestudios/steam/archive/1373e885f26bb636225443787f54d4082283e5f3.zip"
@@ -563,15 +563,45 @@ EOL
     chmod +x "$RUN_ASSella_LAUNCHER"
 }
 
+ensure_local_bin_in_path() {
+    local bin="$HOME/.local/bin"
+    mkdir -p "$bin"
+    local marker="# assella-local-bin"
+    local snippet
+    snippet=$(cat <<'SNIP'
+# assella-local-bin
+if [ -d "$HOME/.local/bin" ]; then
+  case ":${PATH}:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH";; esac
+fi
+SNIP
+)
+    for rc in "$HOME/.profile" "$HOME/.bashrc" "$HOME/.zshrc"; do
+        if [ -f "$rc" ] && ! grep -qF "$marker" "$rc" 2>/dev/null; then
+            printf '\n%s\n' "$snippet" >>"$rc"
+        fi
+    done
+    case ":${PATH}:" in *":$bin:"*) ;; *) export PATH="$bin:$PATH";; esac
+}
+
 write_steam_sls_wrapper() {
+    local sls_dir="$HOME/.local/share/SLSsteam"
+    if [ ! -f "$sls_dir/SLSsteam.so" ] || [ ! -f "$sls_dir/library-inject.so" ]; then
+        echo -e "${YELLOW}[WARN] steam-sls wrapper not created (SLSsteam binaries missing in $sls_dir).${NC}"
+        return 1
+    fi
     mkdir -p "$HOME/.local/bin"
     cat >"$STEAM_SLS_WRAPPER" <<'EOL'
 #!/usr/bin/env bash
 SLS_DIR="${HOME}/.local/share/SLSsteam"
+if [ ! -f "${SLS_DIR}/SLSsteam.so" ] || [ ! -f "${SLS_DIR}/library-inject.so" ]; then
+  echo "SLSsteam binaries missing under ${SLS_DIR}. Re-run: curl -fsSL https://raw.githubusercontent.com/HZSamir/ASSella/beta/install.sh | bash -s -- --sls-only" >&2
+  exit 1
+fi
 export LD_AUDIT="${SLS_DIR}/library-inject.so:${SLS_DIR}/SLSsteam.so"
 exec steam "$@"
 EOL
     chmod +x "$STEAM_SLS_WRAPPER"
+    ensure_local_bin_in_path
 }
 
 verify_sls_elf_arch() {
@@ -683,9 +713,9 @@ install_slssteam_binaries_from_tree() {
     local sls_dir="$2"
     local so inj
     so="$(find "$tree" -name 'SLSsteam.so' -type f 2>/dev/null | head -n1)"
-    inj="$(find "$tree" -name 'library-inject.so' -type f 2>/dev/null | head -n1)"
+    inj="$(find "$tree" \( -name 'library-inject.so' -o -name 'libSLS-library-inject.so' \) -type f 2>/dev/null | head -n1)"
     if [ -z "$so" ] || [ -z "$inj" ]; then
-        echo -e "${RED}[ERROR] SLSsteam archive did not contain SLSsteam.so and library-inject.so.${NC}"
+        echo -e "${RED}[ERROR] SLSsteam archive did not contain SLSsteam.so and an inject library.${NC}"
         echo -e "${YELLOW}[INFO] Extract tree sample:${NC}"
         find "$tree" -type f 2>/dev/null | head -n 25 | sed 's/^/  /' || true
         return 1
@@ -695,11 +725,42 @@ install_slssteam_binaries_from_tree() {
     rm -rf "$sls_dir"
     mkdir -p "$sls_dir"
     cp -a "$payload_dir"/. "$sls_dir/"
+    if [ ! -f "$sls_dir/library-inject.so" ] && [ -f "$sls_dir/libSLS-library-inject.so" ]; then
+        ln -sf "libSLS-library-inject.so" "$sls_dir/library-inject.so"
+    fi
     if [ ! -f "$sls_dir/SLSsteam.so" ] || [ ! -f "$sls_dir/library-inject.so" ]; then
         echo -e "${RED}[ERROR] SLSsteam binaries missing after install to $sls_dir${NC}"
         return 1
     fi
     return 0
+}
+
+verify_slssteam_install_layout() {
+    local sls_dir="$HOME/.local/share/SLSsteam"
+    if [ ! -f "$sls_dir/SLSsteam.so" ] || [ ! -f "$sls_dir/library-inject.so" ]; then
+        echo -e "${RED}[ERROR] SLSsteam install incomplete — expected:${NC}"
+        echo -e "  $sls_dir/SLSsteam.so"
+        echo -e "  $sls_dir/library-inject.so"
+        echo -e "${YELLOW}[INFO] Search elsewhere: find \"\$HOME\" -name 'SLSsteam.so' 2>/dev/null | head${NC}"
+        return 1
+    fi
+    return 0
+}
+
+print_steam_sls_usage() {
+    if [ ! -x "$STEAM_SLS_WRAPPER" ]; then
+        return 1
+    fi
+    ensure_local_bin_in_path
+    echo -e "${GREEN}[OK] SLSsteam binaries installed.${NC}"
+    echo -e "Restart Steam with:"
+    echo -e "  ${GREEN}${STEAM_SLS_WRAPPER}${NC}"
+    if command -v steam-sls &>/dev/null; then
+        echo -e "  (or: ${GREEN}steam-sls${NC})"
+    else
+        echo -e "${YELLOW}[INFO] Added ~/.local/bin to PATH in ~/.profile — open a new terminal, or run:${NC}"
+        echo -e "  export PATH=\"\$HOME/.local/bin:\$PATH\""
+    fi
 }
 
 install_sls_lua_plugins() {
@@ -795,13 +856,17 @@ install_slssteam_minimal() {
     fi
 
     install_sls_lua_plugins || true
-    write_steam_sls_wrapper
+
+    if ! verify_slssteam_install_layout; then
+        return 1
+    fi
+    write_steam_sls_wrapper || return 1
     verify_sls_elf_arch || true
 
     HEADCRAB_INSTALLED=true
     SLS_CONFIG_DIR="$cfg_dir"
     SLS_CONFIG_FILE="$cfg_dir/config.yaml"
-    echo -e "${GREEN}[OK] SLSsteam installed. Restart Steam with: steam-sls${NC}"
+    print_steam_sls_usage
 }
 
 do_install_arm64_source() {
@@ -867,7 +932,7 @@ EOL
     echo -e "\n${GREEN}${BOLD}[OK] ASSella ARM64 installation complete.${NC}"
     echo -e "Launch: ${GREEN}$RUN_ASSella_LAUNCHER${NC} or the ASSella desktop icon."
     if [[ -x "$STEAM_SLS_WRAPPER" ]]; then
-        echo -e "Steam + SLS: ${GREEN}steam-sls${NC}"
+        echo -e "Steam + SLS: ${GREEN}${STEAM_SLS_WRAPPER}${NC}"
     fi
 }
 
