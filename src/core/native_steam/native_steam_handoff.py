@@ -31,6 +31,11 @@ SLSSTEAM_API_PIPE = "/tmp/SLSsteam.API"
 def check_slssteam_active() -> bool:
     """Check if SLSsteam.so is loaded in a running Steam process."""
     try:
+        from core.native_steam.sls_preflight import is_sls_injected_steam_running
+        return is_sls_injected_steam_running()
+    except Exception:
+        pass
+    try:
         for pid_dir in os.listdir("/proc"):
             if not pid_dir.isdigit():
                 continue
@@ -244,8 +249,14 @@ def perform_steam_handoff(
     _emit(f"Initiating Steam handoff for {game_name} ({appid})...")
 
     # 1. Preflight
-    if not check_slssteam_active():
-        return False, "Steam is not running with SLSsteam active. Please start Steam first."
+    try:
+        from core.native_steam.sls_preflight import check_sls_ready_for_handoff
+        sls_ok, sls_msg = check_sls_ready_for_handoff()
+        if not sls_ok:
+            return False, sls_msg
+    except Exception:
+        if not check_slssteam_active():
+            return False, "Steam is not running with SLSsteam active. Please start Steam first."
 
     sls_config_dir = get_sls_config_dir()
     if not sls_config_dir:

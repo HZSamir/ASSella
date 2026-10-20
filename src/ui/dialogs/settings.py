@@ -506,16 +506,23 @@ class SettingsDialog(QDialog):
             from utils.yaml_config_manager import get_user_config_path
             from ui.dialogs.settings_sls import get_sls_paths
             from utils.helpers import is_arm64
+            from core.native_steam.sls_preflight import sls_binaries_compatible
             config_path = get_user_config_path()
             sls_paths = get_sls_paths()
 
-            sls_detected = config_path.exists() and sls_paths.get("detected", False) and not is_arm64()
+            sls_usable = (
+                sls_paths.get("detected", False)
+                and sls_binaries_compatible()
+            )
+            sls_detected = config_path.exists() and sls_usable
 
             if self.experimental_acf_independent_checkbox is not None:
-                if is_arm64():
+                if is_arm64() and not sls_usable:
                     self.experimental_acf_independent_checkbox.setChecked(False)
                     self.experimental_acf_independent_checkbox.setEnabled(False)
-                    self.experimental_acf_independent_checkbox.setToolTip("Disabled: SLSsteam is unavailable on ARM64 architecture.")
+                    self.experimental_acf_independent_checkbox.setToolTip(
+                        "Disabled: compatible SLSsteam binaries were not found for this ARM64 host."
+                    )
                 elif not sls_detected:
                     self.experimental_acf_independent_checkbox.setChecked(False)
                     self.experimental_acf_independent_checkbox.setEnabled(False)

@@ -149,6 +149,46 @@ chmod +x ASSella.AppImage
 
 ---
 
+## DroidDeck (Android desktop, ARM64)
+
+[DroidDeck](https://github.com/Droid-Deck/DroidDeck) runs a proot Arch Linux ARM64 desktop. ASSella uses a **source + venv** install (not the x86_64 AppImage). The full Headcrab installer often hangs at “Connecting to Headcrab updater”; use the DroidDeck-safe SLS path instead.
+
+### Prerequisites
+
+1. Install **Desktop & apps** in DroidDeck and launch **Steam** at least once (so library folders exist).
+2. Obtain your [Hubcap Manifest API key](#_1-get-your-hubcap-manifest-api-key) as usual.
+
+### Install ASSella + SLSsteam
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/niwia/ASSella/arm64/install.sh | bash -s -- --droiddeck -y
+```
+
+SLS only (reinstall without touching the app):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/niwia/ASSella/arm64/install.sh | bash -s -- --sls-only
+```
+
+### After install
+
+- Launch **ASSella** from the KDE app menu or run `~/.local/share/ACCELA/run-assella.sh`.
+- Before **native Steam handoff**, start Steam with SLS injection:
+
+```bash
+steam-sls
+```
+
+(`steam-sls` is installed to `~/.local/bin/steam-sls`.)
+
+### DroidDeck limitations
+
+- No `sudo` / full-system `pacman -Syu` — the installer is user-space only.
+- Upstream `SLSsteam-Any-release.7z` may be **x86_64-only**; native ARM64 Steam needs **aarch64** SLS builds (see [droiddeck-spike.md](./droiddeck-spike.md)). The installer warns when ELF architectures do not match.
+- x86_64 AppImages are not supported on DroidDeck desktop.
+
+---
+
 ## 6. Final Checklist
 
 - [x] Obtained your Hubcap Manifest API key.

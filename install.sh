@@ -58,6 +58,18 @@ IS_CACHYOS=false
 INTERACTIVE=false
 TMP_DIR=""
 SKIP_CHECKSUM=false
+IS_ARM64=false
+IS_DROIDDECK=false
+NO_SUDO=false
+SKIP_SLS=false
+SLS_ONLY=false
+ARM64_NO_PIP=false
+ARM64_SRC_TREE=""
+ARM64_REPO_URL="https://github.com/niwia/ASSella.git"
+ARM64_BRANCH="arm64"
+PLUGINS_ZIP_URL="https://github.com/ciscosweater/enter-the-wired/releases/download/latest/plugins-deps.zip"
+RUN_ASSella_LAUNCHER="$INSTALL_DESTINATION/run-assella.sh"
+STEAM_SLS_WRAPPER="$HOME/.local/bin/steam-sls"
 
 cleanup() {
     if [ -n "${TMP_DIR:-}" ] && [ -d "$TMP_DIR" ]; then
@@ -107,6 +119,38 @@ detect_distro() {
 
     if [[ "$DISTRO_ID" == "cachyos" ]] || [[ "$DISTRO_NAME" == *"CachyOS"* ]]; then
         IS_CACHYOS=true
+    fi
+
+    detect_arm64_platform
+}
+
+detect_arm64_platform() {
+    IS_ARM64=false
+    case "$(uname -m)" in
+        aarch64|arm64) IS_ARM64=true ;;
+    esac
+
+    IS_DROIDDECK=false
+    if [[ "${ASSELLA_FORCE_DROIDDECK:-}" == "1" ]]; then
+        IS_DROIDDECK=true
+    elif [[ -n "${DROIDDECK_VERSION:-}" ]] || [[ -n "${DROIDDECK_ROOT:-}" ]]; then
+        IS_DROIDDECK=true
+    elif [ -f /etc/os-release ]; then
+        if grep -qi 'droiddeck' /etc/os-release 2>/dev/null; then
+            IS_DROIDDECK=true
+        fi
+    fi
+    if [[ "$IS_DROIDDECK" = false ]] && [[ "$IS_ARM64" = true ]]; then
+        if [ -r /proc/1/cmdline ] && tr '\0' ' ' < /proc/1/cmdline 2>/dev/null | grep -q 'proot'; then
+            IS_DROIDDECK=true
+        fi
+    fi
+
+    NO_SUDO=false
+    if [[ "$IS_DROIDDECK" = true ]]; then
+        NO_SUDO=true
+    elif ! command -v sudo &>/dev/null; then
+        NO_SUDO=true
     fi
 }
 
@@ -207,7 +251,9 @@ detect_steam_paths() {
 check_headcrab_status() {
     HEADCRAB_INSTALLED=false
     detect_steam_paths
-    if [ -f "$SLS_CONFIG_FILE" ] || [ -d "$SLS_CONFIG_DIR" ] || [ -d "/tmp/SLSsteam" ]; then
+    if [ -f "$HOME/.local/share/SLSsteam/SLSsteam.so" ]; then
+        HEADCRAB_INSTALLED=true
+    elif [ -f "$SLS_CONFIG_FILE" ] || [ -d "$SLS_CONFIG_DIR" ] || [ -d "/tmp/SLSsteam" ]; then
         HEADCRAB_INSTALLED=true
     elif command -v systemctl &>/dev/null && systemctl --user is-active slssteam &>/dev/null; then
         HEADCRAB_INSTALLED=true
@@ -229,8 +275,398 @@ detect_channel() {
     if [ -n "${TARGET_CHANNEL:-}" ]; then
         return 0
     fi
+    if [[ "${IS_ARM64:-false}" = true ]]; then
+        TARGET_CHANNEL="arm64"
+        ARM64_BRANCH="arm64"
+        return 0
+    fi
     # Default to beta channel for beta branch installer
     TARGET_CHANNEL="beta"
+}
+
+python3_version_ok() {
+    local ver
+    ver="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || echo "0.0")"
+    local major="${ver%%.*}"
+    local minor="${ver#*.}"
+    if (( major > 3 )) || { (( major == 3 )) && (( minor >= 12 )); }; then
+        return 0
+    fi
+    return 1
+}
+
+ensure_bundled_python_arm64() {
+    local py_root="$INSTALL_DESTINATION/.python"
+    local py_bin="$py_root/bin/python3"
+    if [ -x "$py_bin" ]; then
+        return 0
+    fi
+    echo -e "${YELLOW}[INFO] Bootstrapping Python 3.13 (aarch64 standalone) for ASSella...${NC}"
+    local tgz="${TMP_DIR:-/tmp}/cpython-arm64.tar.gz"
+    mkdir -p "$TMP_DIR" "$py_root" 2>/dev/null || true
+    if ! curl -fsSL --retry 3 -o "$tgz" \
+        "https://github.com/astral-sh/python-build-standalone/releases/download/20241016/cpython-3.13.0+20241016-aarch64-unknown-linux-gnu-install_only.tar.gz"; then
+        echo -e "${RED}[ERROR] Failed to download standalone Python for ARM64.${NC}" >&2
+        return 1
+    fi
+    tar -xzf "$tgz" -C "$py_root" --strip-components=1 2>/dev/null || tar -xzf "$tgz" -C "$py_root"
+    [ -x "$py_bin" ] || py_bin="$(find "$py_root" -maxdepth 3 -name python3 -type f 2>/dev/null | head -n1)"
+    if [ ! -x "$py_bin" ]; then
+        echo -e "${RED}[ERROR] Standalone Python extraction failed.${NC}" >&2
+        return 1
+    fi
+    echo -e "${GREEN}[OK] Standalone Python ready at $py_bin${NC}"
+}
+
+resolve_python3_for_venv() {
+    if python3_version_ok && command -v python3 &>/dev/null; then
+        echo "python3"
+        return 0
+    fi
+    ensure_bundled_python_arm64 || return 1
+    local py_bin="$INSTALL_DESTINATION/.python/bin/python3"
+    [ -x "$py_bin" ] || py_bin="$(find "$INSTALL_DESTINATION/.python" -maxdepth 3 -name python3 -type f 2>/dev/null | head -n1)"
+    if [ -x "$py_bin" ]; then
+        echo "$py_bin"
+        return 0
+    fi
+    return 1
+}
+
+ensure_arm64_prereqs() {
+    local missing=()
+    for cmd in curl git; do
+        command -v "$cmd" &>/dev/null || missing+=("$cmd")
+    done
+    if ! command -v python3 &>/dev/null && ! resolve_python3_for_venv &>/dev/null; then
+        missing+=("python3")
+    fi
+    if ((${#missing[@]} > 0)); then
+        echo -e "${RED}[ERROR] Missing required tools: ${missing[*]}${NC}" >&2
+        return 1
+    fi
+    if ! python3_version_ok; then
+        echo -e "${YELLOW}[WARN] System python3 is older than 3.12; will try standalone Python 3.13.${NC}"
+    fi
+    return 0
+}
+
+sync_arm64_source() {
+    ARM64_SRC_TREE="$INSTALL_DESTINATION/src-tree"
+    mkdir -p "$INSTALL_DESTINATION"
+
+    local script_root=""
+    if [ -f "${BASH_SOURCE[0]:-}" ]; then
+        script_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    fi
+    if [ -n "$script_root" ] && [ -f "$script_root/src/main.py" ]; then
+        echo -e "${YELLOW}[INFO] Copying local ASSella source into $ARM64_SRC_TREE...${NC}"
+        mkdir -p "$ARM64_SRC_TREE"
+        if command -v rsync &>/dev/null; then
+            rsync -a --delete --exclude '.git' --exclude '.venv' --exclude 'node_modules' \
+                "$script_root/" "$ARM64_SRC_TREE/"
+        else
+            rm -rf "$ARM64_SRC_TREE"/*
+            cp -a "$script_root"/. "$ARM64_SRC_TREE/"
+        fi
+        return 0
+    fi
+
+    if [ -d "$ARM64_SRC_TREE/.git" ]; then
+        echo -e "${YELLOW}[INFO] Updating ASSella source ($ARM64_BRANCH)...${NC}"
+        git -C "$ARM64_SRC_TREE" fetch origin "$ARM64_BRANCH" --depth 1 2>/dev/null || \
+            git -C "$ARM64_SRC_TREE" fetch origin "$ARM64_BRANCH"
+        git -C "$ARM64_SRC_TREE" checkout "$ARM64_BRANCH"
+        git -C "$ARM64_SRC_TREE" pull origin "$ARM64_BRANCH" --ff-only || \
+            git -C "$ARM64_SRC_TREE" reset --hard "origin/$ARM64_BRANCH"
+    else
+        echo -e "${YELLOW}[INFO] Cloning ASSella ($ARM64_BRANCH) into $ARM64_SRC_TREE...${NC}"
+        rm -rf "$ARM64_SRC_TREE"
+        git clone --branch "$ARM64_BRANCH" --depth 1 "$ARM64_REPO_URL" "$ARM64_SRC_TREE"
+    fi
+}
+
+fetch_arm64_deps_dlls() {
+    local deps_dir="$ARM64_SRC_TREE/src/deps"
+    local branch="${ARM64_BRANCH:-arm64}"
+    local base="https://raw.githubusercontent.com/niwia/ASSella/${branch}/src/deps"
+    mkdir -p "$deps_dir"
+    local dlls=(
+        DepotDownloader.dll
+        DepotDownloader.deps.json
+        DepotDownloader.runtimeconfig.json
+        SteamKit2.dll
+        protobuf-net.dll
+        protobuf-net.Core.dll
+        ZstdSharp.dll
+        System.IO.Hashing.dll
+        QRCoder.dll
+    )
+    local name
+    for name in "${dlls[@]}"; do
+        if [ ! -s "$deps_dir/$name" ]; then
+            echo -e "${YELLOW}[INFO] Fetching $name...${NC}"
+            curl -fsSL "$base/$name" -o "$deps_dir/$name" || {
+                echo -e "${RED}[WARN] Could not download $name${NC}"
+            }
+        fi
+    done
+}
+
+ensure_arm64_dotnet() {
+    local dotnet_root="$HOME/.dotnet"
+    if [ -x "$dotnet_root/dotnet" ] && "$dotnet_root/dotnet" --list-runtimes 2>/dev/null | grep -q "Microsoft.NETCore.App 9"; then
+        echo -e "${GREEN}[OK] .NET 9 runtime (ARM64) already installed.${NC}"
+        return 0
+    fi
+    echo -e "${YELLOW}[INFO] Installing .NET 9 runtime (linux-arm64) to $dotnet_root...${NC}"
+    local ds
+    ds="$(mktemp -t dotnet-install.XXXXXX.sh)"
+    curl -fsSL https://dot.net/v1/dotnet-install.sh -o "$ds"
+    chmod +x "$ds"
+    bash "$ds" --runtime dotnet --channel 9.0 --architecture arm64 --install-dir "$dotnet_root"
+    rm -f "$ds"
+}
+
+ensure_arm64_venv() {
+    local py
+    py="$(resolve_python3_for_venv)" || return 1
+    local venv="$INSTALL_DESTINATION/.venv"
+    if [ ! -x "$venv/bin/python3" ]; then
+        echo -e "${YELLOW}[INFO] Creating Python virtual environment...${NC}"
+        "$py" -m venv "$venv"
+    fi
+    if [[ "${ARM64_NO_PIP:-false}" = true ]]; then
+        echo -e "${YELLOW}[INFO] Skipping pip install (--no-pip).${NC}"
+        return 0
+    fi
+    echo -e "${YELLOW}[INFO] Installing Python dependencies (this may take several minutes)...${NC}"
+    "$venv/bin/python3" -m pip install --upgrade pip wheel -q
+    "$venv/bin/python3" -m pip install -r "$ARM64_SRC_TREE/requirements.txt" -q
+}
+
+write_run_assella_launcher() {
+    cat >"$RUN_ASSella_LAUNCHER" <<'EOL'
+#!/usr/bin/env bash
+export DOTNET_ROOT="${HOME}/.dotnet"
+export PATH="${HOME}/.dotnet:${HOME}/.local/bin:${PATH}"
+export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+INSTALL_ROOT="${HOME}/.local/share/ACCELA"
+SRC_TREE="${INSTALL_ROOT}/src-tree"
+cd "$SRC_TREE" || exit 1
+exec "${INSTALL_ROOT}/.venv/bin/python3" "$SRC_TREE/src/main.py" "$@"
+EOL
+    chmod +x "$RUN_ASSella_LAUNCHER"
+}
+
+write_steam_sls_wrapper() {
+    mkdir -p "$HOME/.local/bin"
+    cat >"$STEAM_SLS_WRAPPER" <<'EOL'
+#!/usr/bin/env bash
+SLS_DIR="${HOME}/.local/share/SLSsteam"
+export LD_AUDIT="${SLS_DIR}/library-inject.so:${SLS_DIR}/SLSsteam.so"
+exec steam "$@"
+EOL
+    chmod +x "$STEAM_SLS_WRAPPER"
+}
+
+verify_sls_elf_arch() {
+    local so="$HOME/.local/share/SLSsteam/SLSsteam.so"
+    local inj="$HOME/.local/share/SLSsteam/library-inject.so"
+    if [ ! -f "$so" ] || [ ! -f "$inj" ]; then
+        return 1
+    fi
+    if ! command -v file &>/dev/null; then
+        echo -e "${YELLOW}[WARN] 'file' command missing; cannot verify SLSsteam architecture.${NC}"
+        return 0
+    fi
+    local host arch_so arch_inj
+    host="$(uname -m)"
+    arch_so="$(file -b "$so" 2>/dev/null || true)"
+    arch_inj="$(file -b "$inj" 2>/dev/null || true)"
+    case "$host" in
+        aarch64|arm64)
+            if [[ "$arch_so" != *"ARM aarch64"* ]] && [[ "$arch_so" != *"aarch64"* ]]; then
+                echo -e "${RED}${BOLD}[WARN] SLSsteam.so architecture mismatch for $host:${NC}"
+                echo -e "  $arch_so"
+                echo -e "${YELLOW}Native ARM64 Steam cannot load x86_64 SLSsteam. See docs/droiddeck-spike.md${NC}"
+                return 1
+            fi
+            ;;
+        x86_64|amd64)
+            if [[ "$arch_so" != *"x86-64"* ]]; then
+                echo -e "${YELLOW}[WARN] SLSsteam.so may not match x86_64 host.${NC}"
+            fi
+            ;;
+    esac
+    return 0
+}
+
+install_sls_lua_plugins() {
+    local cfg_dir="$HOME/.config/SLSsteam"
+    local plugins_dir="$cfg_dir/plugins"
+    mkdir -p "$plugins_dir"
+    local zip="${TMP_DIR:-$(mktemp -d)}/plugins-deps.zip"
+    if ! curl -fsSL --retry 3 "$PLUGINS_ZIP_URL" -o "$zip"; then
+        echo -e "${YELLOW}[WARN] Could not download Lua plugins package.${NC}"
+        return 1
+    fi
+    if command -v unzip &>/dev/null; then
+        unzip -j -o -q "$zip" "*.lua" -d "$plugins_dir" || true
+    else
+        echo -e "${YELLOW}[WARN] unzip not found; skipping Lua plugin extraction.${NC}"
+        return 1
+    fi
+    local cfg="$cfg_dir/config.yaml"
+    if [ ! -s "$cfg" ]; then
+        printf 'Plugins: yes\n' > "$cfg"
+    elif grep -qE '^[[:space:]]*Plugins:' "$cfg"; then
+        sed -i -E 's/^[[:space:]]*Plugins:[[:space:]]*.*/Plugins: yes/' "$cfg"
+    else
+        printf '\nPlugins: yes\n' >> "$cfg"
+    fi
+    echo -e "${GREEN}[OK] Lua plugins deployed to $plugins_dir${NC}"
+}
+
+install_slssteam_minimal() {
+    echo -e "\n${CYAN}${BOLD}=== SLSsteam install (DroidDeck-safe, no Steam updater) ===${NC}"
+
+    local sls_dir="$HOME/.local/share/SLSsteam"
+    local cfg_dir="$HOME/.config/SLSsteam"
+    mkdir -p "$sls_dir" "$cfg_dir"
+
+    if [ ! -d "$HOME/.local/share/Steam/steamapps" ] && [ ! -d "$HOME/.steam/steam/steamapps" ]; then
+        echo -e "${YELLOW}[WARN] Steam library not found. Launch Steam once before SLS install.${NC}"
+    fi
+
+    local work="${TMP_DIR:-}"
+    if [ -z "$work" ] || [ ! -d "$work" ]; then
+        work="$(mktemp -d -t assella-sls-XXXXXX)"
+    fi
+    local dl_dir="$work/SLSsteam_Download"
+    mkdir -p "$dl_dir"
+    cd "$dl_dir" || return 1
+
+    echo -e "${YELLOW}[INFO] Downloading netsock patch...${NC}"
+    mkdir -p "$cfg_dir/tools/netsock"
+    curl -fsSL "https://cdn.jsdelivr.net/gh/yesyes0649/steamnetsock-patch@builds/fix.so" \
+        -o "$cfg_dir/tools/netsock/netsock.so" 2>/dev/null || true
+
+    echo -e "${YELLOW}[INFO] Downloading latest SLSsteam release...${NC}"
+    local tag
+    tag="$(curl -fsSL -o /dev/null -w '%{url_effective}' \
+        "https://github.com/AceSLS/SLSsteam/releases/latest" 2>/dev/null | sed 's|.*/||')"
+    if [ -z "$tag" ]; then
+        echo -e "${RED}[ERROR] Could not resolve SLSsteam release tag.${NC}"
+        return 1
+    fi
+    if ! curl -fsSL -o SLSsteam-Any.7z \
+        "https://github.com/AceSLS/SLSsteam/releases/download/${tag}/SLSsteam-Any-release.7z"; then
+        echo -e "${RED}[ERROR] Failed to download SLSsteam archive.${NC}"
+        return 1
+    fi
+
+    local extract_ok=false
+    if command -v 7z &>/dev/null; then
+        7z x -y SLSsteam-Any.7z -o"$dl_dir/extracted" >/dev/null && extract_ok=true
+    elif command -v 7za &>/dev/null; then
+        7za x -y SLSsteam-Any.7z -o"$dl_dir/extracted" >/dev/null && extract_ok=true
+    elif command -v bsdtar &>/dev/null; then
+        mkdir -p "$dl_dir/extracted"
+        bsdtar -xf SLSsteam-Any.7z -C "$dl_dir/extracted" && extract_ok=true
+    fi
+    if [[ "$extract_ok" != true ]]; then
+        echo -e "${RED}[ERROR] Install 7z, p7zip, or bsdtar to extract SLSsteam.${NC}"
+        return 1
+    fi
+
+    echo -e "${YELLOW}[INFO] Installing SLSsteam into $sls_dir...${NC}"
+    rm -rf "$sls_dir"
+    mkdir -p "$sls_dir"
+    if [ -d "$dl_dir/extracted" ]; then
+        cp -a "$dl_dir/extracted"/* "$sls_dir/" 2>/dev/null || cp -a "$dl_dir/extracted/." "$sls_dir/"
+    fi
+    if [ -f "$dl_dir/extracted/res/config.yaml" ]; then
+        mkdir -p "$cfg_dir"
+        if [ ! -s "$cfg_dir/config.yaml" ]; then
+            cp -a "$dl_dir/extracted/res/config.yaml" "$cfg_dir/config.yaml"
+        fi
+    fi
+
+    install_sls_lua_plugins || true
+    write_steam_sls_wrapper
+    verify_sls_elf_arch || true
+
+    HEADCRAB_INSTALLED=true
+    SLS_CONFIG_DIR="$cfg_dir"
+    SLS_CONFIG_FILE="$cfg_dir/config.yaml"
+    echo -e "${GREEN}[OK] SLSsteam installed. Restart Steam with: steam-sls${NC}"
+}
+
+do_install_arm64_source() {
+    echo -e "\n${YELLOW}[INFO] Installing ASSella (ARM64 source build)...${NC}"
+    mkdir -p "$INSTALL_DESTINATION"
+    check_disk_space "$INSTALL_DESTINATION" || return 1
+    ensure_arm64_prereqs || return 1
+
+    TMP_DIR="$(mktemp -d -t assella-arm64-XXXXXX)" || {
+        echo -e "${RED}[ERROR] Could not create temporary directory.${NC}"
+        return 1
+    }
+
+    sync_arm64_source || return 1
+    fetch_arm64_deps_dlls
+    ensure_arm64_dotnet || return 1
+    ensure_arm64_venv || return 1
+
+    write_run_assella_launcher
+
+    if [ -f "$ARM64_SRC_TREE/src/res/version" ]; then
+        cp -a "$ARM64_SRC_TREE/src/res/version" "$VERSION_FILE"
+        read -r LOCAL_VER < "$VERSION_FILE" || LOCAL_VER="ARM64"
+    else
+        echo "arm64-source" > "$VERSION_FILE"
+    fi
+
+    local exec_cmd="$RUN_ASSella_LAUNCHER %u"
+    echo -e "${YELLOW}[INFO] Configuring desktop shortcut...${NC}"
+    mkdir -p "$DESKTOP_DIR" "$ICON_DIR"
+    cat >"$PRIMARY_DESKTOP_ENTRY" <<EOL
+[Desktop Entry]
+Version=2.0
+Name=ASSella
+Comment=Steam depot management (ARM64)
+Exec=$exec_cmd
+Icon=assella
+Terminal=false
+Type=Application
+Categories=Utility;Game;
+MimeType=x-scheme-handler/accela;
+EOL
+
+    local icon_src="$ARM64_SRC_TREE/src/res/logo/icon.png"
+    if [ -f "$icon_src" ]; then
+        cp -a "$icon_src" "$PRIMARY_ICON_PATH"
+    else
+        curl -sL -o "$PRIMARY_ICON_PATH" \
+            "https://raw.githubusercontent.com/niwia/ASSella/${ARM64_BRANCH}/src/res/logo/icon.png" || true
+    fi
+
+    if command -v update-desktop-database &>/dev/null; then
+        update-desktop-database "$DESKTOP_DIR" 2>/dev/null || true
+    fi
+
+    if [[ "${SKIP_SLS:-false}" = false ]] && [[ "${SLS_ONLY:-false}" = false ]]; then
+        if [[ "${IS_DROIDDECK:-false}" = true ]] || [[ "${INSTALL_SLS_WITH_ARM64:-}" == "1" ]]; then
+            install_slssteam_minimal || echo -e "${YELLOW}[WARN] SLS install failed; continue with depot-only mode.${NC}"
+        fi
+    fi
+
+    echo -e "\n${GREEN}${BOLD}[OK] ASSella ARM64 installation complete.${NC}"
+    echo -e "Launch: ${GREEN}$RUN_ASSella_LAUNCHER${NC} or the ASSella desktop icon."
+    if [[ -x "$STEAM_SLS_WRAPPER" ]]; then
+        echo -e "Steam + SLS: ${GREEN}steam-sls${NC}"
+    fi
 }
 
 prompt_user() {
@@ -486,6 +922,10 @@ show_header() {
     echo -e "  ${BOLD}OS Detected:${NC}      ${DISTRO_NAME:-Generic Linux} ($(uname -m))"
     if [ "${IS_STEAM_DECK:-false}" = true ]; then
         echo -e "  ${BOLD}Device:${NC}           Steam Deck (SteamOS)"
+    elif [ "${IS_DROIDDECK:-false}" = true ]; then
+        echo -e "  ${BOLD}Device:${NC}           DroidDeck (ARM64 / proot)"
+    elif [ "${IS_ARM64:-false}" = true ]; then
+        echo -e "  ${BOLD}Device:${NC}           ARM64 Linux"
     fi
 
     # Steam Client Status
@@ -903,6 +1343,30 @@ run_diagnostics() {
         echo -e "${YELLOW}NOT CREATED YET${NC}"
     fi
 
+    if [[ "${IS_ARM64:-false}" = true ]]; then
+        echo -n "  7. DroidDeck profile: "
+        if [[ "${IS_DROIDDECK:-false}" = true ]]; then
+            echo -e "${GREEN}YES${NC}"
+        else
+            echo -e "${YELLOW}NO (generic ARM64)${NC}"
+        fi
+        echo -n "  8. ARM64 launcher: "
+        if [ -x "$RUN_ASSella_LAUNCHER" ]; then
+            echo -e "${GREEN}OK ($RUN_ASSella_LAUNCHER)${NC}"
+        else
+            echo -e "${YELLOW}NOT INSTALLED${NC}"
+        fi
+        echo -n "  9. steam-sls wrapper: "
+        if [ -x "$STEAM_SLS_WRAPPER" ]; then
+            echo -e "${GREEN}OK${NC}"
+        else
+            echo -e "${YELLOW}MISSING${NC}"
+        fi
+        if command -v file &>/dev/null && [ -f "$HOME/.local/share/SLSsteam/SLSsteam.so" ]; then
+            echo -e "  10. SLSsteam.so: $(file -b "$HOME/.local/share/SLSsteam/SLSsteam.so" 2>/dev/null)"
+        fi
+    fi
+
     echo -e "\n${CYAN}${BOLD}-------------------------------------------------------------------${NC}\n"
     read -p "Press Enter to return to main menu..." dummy
 }
@@ -915,48 +1379,82 @@ interactive_flow() {
     show_header
     echo -e "${BOLD}${CYAN}Welcome to the ASSella Setup Wizard${NC}\n"
 
-    # Step 1: Headcrab (SLSsteam)
-    echo -e "${BOLD}--- [Step 1/2] Headcrab (SLSsteam) Setup ---${NC}"
-    check_headcrab_status
-    local default_hc="n"
-    local hc_prompt=""
-    if [ "$HEADCRAB_INSTALLED" = true ]; then
-        echo -e "  Status: ${GREEN}Installed ($SLS_CONFIG_DIR)${NC}"
-        hc_prompt="Do you want to re-run / update Headcrab (SLSsteam)? [y/N]: "
-        default_hc="n"
+    if [[ "${IS_ARM64:-false}" = true ]]; then
+        echo -e "${BOLD}--- [Step 1/2] SLSsteam (DroidDeck-safe) ---${NC}"
+        check_headcrab_status
+        local default_sls="n"
+        local sls_prompt=""
+        if [ "$HEADCRAB_INSTALLED" = true ] || [ -f "$HOME/.local/share/SLSsteam/SLSsteam.so" ]; then
+            echo -e "  Status: ${GREEN}SLS files present${NC}"
+            sls_prompt="Reinstall SLSsteam (skips Headcrab updater)? [y/N]: "
+            default_sls="n"
+        else
+            echo -e "  Status: ${YELLOW}Not Detected${NC}"
+            sls_prompt="Install SLSsteam now (no Headcrab Steam updater)? [Y/n]: "
+            default_sls="y"
+        fi
+        local run_sls=""
+        run_sls=$(prompt_user "$sls_prompt" "$default_sls")
+        if [[ "$run_sls" =~ ^[yY] ]]; then
+            install_slssteam_minimal
+        else
+            echo -e "${YELLOW}[INFO] Skipping SLSsteam installation.${NC}"
+        fi
+        echo ""
+        echo -e "${BOLD}--- [Step 2/2] ASSella Application (ARM64 source) ---${NC}"
+        get_local_version
+        echo -e "  Currently Installed: ${YELLOW}$LOCAL_VER${NC}"
+        local install_prompt="Do you want to install / update ASSella? [Y/n]: "
+        local run_install=""
+        run_install=$(prompt_user "$install_prompt" "y")
+        if [[ "$run_install" =~ ^[yY] ]]; then
+            SKIP_SLS=true
+            do_install_arm64_source
+        else
+            echo -e "${YELLOW}[INFO] Skipping ASSella installation.${NC}"
+        fi
     else
-        echo -e "  Status: ${YELLOW}Not Detected${NC}"
-        echo -e "  ${CYAN}Headcrab is required for SLSsteam integration and game launching.${NC}"
-        hc_prompt="Do you want to install Headcrab (SLSsteam) now? [Y/n]: "
-        default_hc="y"
-    fi
+        # Step 1: Headcrab (SLSsteam)
+        echo -e "${BOLD}--- [Step 1/2] Headcrab (SLSsteam) Setup ---${NC}"
+        check_headcrab_status
+        local default_hc="n"
+        local hc_prompt=""
+        if [ "$HEADCRAB_INSTALLED" = true ]; then
+            echo -e "  Status: ${GREEN}Installed ($SLS_CONFIG_DIR)${NC}"
+            hc_prompt="Do you want to re-run / update Headcrab (SLSsteam)? [y/N]: "
+            default_hc="n"
+        else
+            echo -e "  Status: ${YELLOW}Not Detected${NC}"
+            echo -e "  ${CYAN}Headcrab is required for SLSsteam integration and game launching.${NC}"
+            hc_prompt="Do you want to install Headcrab (SLSsteam) now? [Y/n]: "
+            default_hc="y"
+        fi
 
-    local run_hc=""
-    run_hc=$(prompt_user "$hc_prompt" "$default_hc")
-    if [[ "$run_hc" =~ ^[yY] ]]; then
-        run_headcrab_installer
-    else
-        echo -e "${YELLOW}[INFO] Skipping Headcrab installation.${NC}"
-    fi
+        local run_hc=""
+        run_hc=$(prompt_user "$hc_prompt" "$default_hc")
+        if [[ "$run_hc" =~ ^[yY] ]]; then
+            run_headcrab_installer
+        else
+            echo -e "${YELLOW}[INFO] Skipping Headcrab installation.${NC}"
+        fi
 
-    # FUSE 2 Check
-    check_and_warn_fuse
+        check_and_warn_fuse
 
-    echo ""
-    # Step 2: ASSella
-    echo -e "${BOLD}--- [Step 2/2] ASSella Application Setup ---${NC}"
-    get_local_version
-    get_latest_github_version
-    echo -e "  Currently Installed: ${YELLOW}$LOCAL_VER${NC}"
-    echo -e "  Latest Available:    ${GREEN}$LATEST_VER${NC} (${CYAN}Channel: $TARGET_CHANNEL${NC})"
+        echo ""
+        echo -e "${BOLD}--- [Step 2/2] ASSella Application Setup ---${NC}"
+        get_local_version
+        get_latest_github_version
+        echo -e "  Currently Installed: ${YELLOW}$LOCAL_VER${NC}"
+        echo -e "  Latest Available:    ${GREEN}$LATEST_VER${NC} (${CYAN}Channel: $TARGET_CHANNEL${NC})"
 
-    local install_prompt="Do you want to install / update ASSella? [Y/n]: "
-    local run_install=""
-    run_install=$(prompt_user "$install_prompt" "y")
-    if [[ "$run_install" =~ ^[yY] ]]; then
-        do_install
-    else
-        echo -e "${YELLOW}[INFO] Skipping ASSella installation.${NC}"
+        local install_prompt="Do you want to install / update ASSella? [Y/n]: "
+        local run_install=""
+        run_install=$(prompt_user "$install_prompt" "y")
+        if [[ "$run_install" =~ ^[yY] ]]; then
+            do_install
+        else
+            echo -e "${YELLOW}[INFO] Skipping ASSella installation.${NC}"
+        fi
     fi
 
     echo -e "\n${GREEN}${BOLD}Setup completed!${NC}\n"
@@ -1041,6 +1539,20 @@ main() {
 
     while [ $# -gt 0 ]; do
         case "$1" in
+            --droiddeck)
+                IS_DROIDDECK=true
+                NO_SUDO=true
+                ;;
+            --skip-sls)
+                SKIP_SLS=true
+                ;;
+            --sls-only)
+                SLS_ONLY=true
+                action="sls-only"
+                ;;
+            --no-pip)
+                ARM64_NO_PIP=true
+                ;;
             --canary)
                 TARGET_CHANNEL="canary"
                 ;;
@@ -1051,7 +1563,11 @@ main() {
                 TARGET_CHANNEL="stable"
                 ;;
             --headcrab|--sls)
-                action="headcrab"
+                if [[ "${IS_ARM64:-false}" = true ]]; then
+                    action="sls-only"
+                else
+                    action="headcrab"
+                fi
                 ;;
             --with-headcrab)
                 run_hc=true
@@ -1095,31 +1611,57 @@ main() {
     case "$action" in
         interactive)
             if [ "$non_interactive" = true ]; then
-                do_install
+                if [[ "${IS_ARM64:-false}" = true ]]; then
+                    do_install_arm64_source
+                else
+                    do_install
+                fi
             elif [ -t 0 ] || [ -r /dev/tty ]; then
                 interactive_flow
             else
-                do_install
+                if [[ "${IS_ARM64:-false}" = true ]]; then
+                    do_install_arm64_source
+                else
+                    do_install
+                fi
             fi
+            ;;
+        sls-only)
+            install_slssteam_minimal
             ;;
         headcrab)
-            run_headcrab_installer
-            ;;
-        install)
-            if [ "$run_hc" = true ]; then
+            if [[ "${IS_ARM64:-false}" = true ]]; then
+                install_slssteam_minimal
+            else
                 run_headcrab_installer
             fi
-            do_install
+            ;;
+        install)
+            if [[ "${IS_ARM64:-false}" = true ]]; then
+                if [ "$run_hc" = true ] && [[ "${SKIP_SLS:-false}" = false ]]; then
+                    install_slssteam_minimal || true
+                fi
+                do_install_arm64_source
+            else
+                if [ "$run_hc" = true ]; then
+                    run_headcrab_installer
+                fi
+                do_install
+            fi
             ;;
         menu)
             interactive_menu
             ;;
         update)
-            get_latest_github_version
-            if [ "$LOCAL_VER" != "$LATEST_VER" ]; then
-                do_install
+            if [[ "${IS_ARM64:-false}" = true ]]; then
+                do_install_arm64_source
             else
-                echo -e "${GREEN}ASSella is already up to date ($LOCAL_VER) on channel ($TARGET_CHANNEL).${NC}"
+                get_latest_github_version
+                if [ "$LOCAL_VER" != "$LATEST_VER" ]; then
+                    do_install
+                else
+                    echo -e "${GREEN}ASSella is already up to date ($LOCAL_VER) on channel ($TARGET_CHANNEL).${NC}"
+                fi
             fi
             ;;
         restore)
@@ -1136,6 +1678,12 @@ main() {
             echo "  --beta           Target Beta channel (v2.7.0beta)"
             echo "  --canary         Target Canary channel (v3.0.x)"
             echo "  --stable         Target Stable channel"
+            echo ""
+            echo "DroidDeck / ARM64 Options:"
+            echo "  --droiddeck      Force DroidDeck profile (ARM64 source install)"
+            echo "  --sls-only       Install SLSsteam without Headcrab Steam updater"
+            echo "  --skip-sls       Skip SLS install during ARM64 setup"
+            echo "  --no-pip         Skip pip install on ARM64 update (git pull only)"
             echo ""
             echo "Execution Options:"
             echo "  (no args)        Interactive wizard (prompts for Headcrab & ASSella)"

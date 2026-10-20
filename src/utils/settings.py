@@ -55,6 +55,16 @@ def get_settings() -> QSettings:
             _settings_local.instance.setValue("font", "Open Sans")
             _settings_local.instance.setValue("font-size", 10)
             _settings_local.instance.setValue("font-style", "Normal")
+            try:
+                from utils.helpers import is_arm64, is_droiddeck
+                from core.native_steam.sls_preflight import sls_binaries_compatible, sls_binaries_present
+                if is_arm64() and is_droiddeck():
+                    _settings_local.instance.setValue("use_native_steam_download", True)
+                    _settings_local.instance.setValue("sls_config_management", True)
+                    if sls_binaries_present() and sls_binaries_compatible():
+                        _settings_local.instance.setValue("experimental_acf_independent", True)
+            except Exception:
+                pass
             _settings_local.instance.sync()
 
         # Sanitize legacy font settings (e.g. old Accela Trixie Cyrillic typewriter font)

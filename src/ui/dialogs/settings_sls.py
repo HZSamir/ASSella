@@ -224,9 +224,21 @@ def is_headcrab_installed() -> bool:
     return (os.path.exists(dgsc_path) and os.path.exists(dlm_path)) or os.path.exists(desktop_path)
 
 
+def _sls_install_shell_command() -> str:
+    from utils.helpers import is_droiddeck
+    if is_droiddeck():
+        return (
+            "curl -fsSL https://raw.githubusercontent.com/niwia/ASSella/arm64/install.sh | "
+            "bash -s -- --sls-only; echo; echo '--- Done. Press Enter to close ---'; read _"
+        )
+    return (
+        "curl -fsSL headcrab.pages.dev | bash; echo; echo '--- Done. Press Enter to close ---'; read _"
+    )
+
+
 def run_headcrab_and_quit(dialog) -> bool:
     """Run Headcrab curl installer in terminal and gracefully quit ASSella."""
-    cmd = ["bash", "-c", "curl -fsSL headcrab.pages.dev | bash; echo; echo '--- Done. Press Enter to close ---'; read _"]
+    cmd = ["bash", "-c", _sls_install_shell_command()]
     launched = dialog._launch_terminal_command(cmd, os.path.expanduser("~"))
     if launched:
         from PyQt6.QtCore import QTimer
@@ -238,13 +250,24 @@ def run_headcrab_and_quit(dialog) -> bool:
 
 def run_headcrab(dialog, callback=None) -> None:
     """Prompt and run Headcrab installation script inside a terminal, quitting ASSella upon launch."""
+    from utils.helpers import is_droiddeck
     already = is_headcrab_installed()
     verb = "re-run" if already else "install"
+    if is_droiddeck():
+        install_line = (
+            "  curl -fsSL https://raw.githubusercontent.com/niwia/ASSella/arm64/install.sh | "
+            "bash -s -- --sls-only"
+        )
+        title = "Install SLSsteam (DroidDeck)"
+        body_intro = f"This will {verb} SLSsteam (without the Headcrab Steam updater) via:\n"
+    else:
+        install_line = "  curl -fsSL headcrab.pages.dev | bash"
+        title = "Run Headcrab"
+        body_intro = f"This will {verb} Headcrab via:\n"
     reply = ThemedMessageBox.question(
         dialog,
-        "Run Headcrab",
-        f"This will {verb} Headcrab via:\n"
-        "  curl -fsSL headcrab.pages.dev | bash\n\n"
+        title,
+        f"{body_intro}{install_line}\n\n"
         "A terminal window will open and ASSella will close so Headcrab can safely update SLSsteam without file conflicts.\n\n"
         "Proceed?",
         ThemedMessageBox.StandardButton.Yes | ThemedMessageBox.StandardButton.No,
@@ -266,16 +289,28 @@ def create_sls_tab(dialog) -> QWidget:
     # 1. Integration Card
     int_card, int_layout = dialog._create_card_frame("SLS Settings")
 
-    from utils.helpers import is_arm64, is_armada_os
-    if is_arm64():
-        os_name = "Armada OS" if is_armada_os() else "ARM64 Linux"
+    from utils.helpers import is_arm64, is_armada_os, is_droiddeck
+    from core.native_steam.sls_preflight import sls_binaries_compatible, sls_binaries_present
+    if is_arm64() and not (sls_binaries_present() and sls_binaries_compatible()):
+        os_name = "DroidDeck" if is_droiddeck() else ("Armada OS" if is_armada_os() else "ARM64 Linux")
         arm_badge = QLabel(
-            f"ℹ️ <b>{os_name} (ARM64)</b>: SLSsteam is an x86_64 library injector and is not available "
-            "on ARM64. ASSella is running in <b>Standalone Mode</b> (Direct Depot Downloads, Local Manifest Management, "
-            "and Non-Steam Game launching)."
+            f"ℹ️ <b>{os_name} (ARM64)</b>: Compatible SLSsteam binaries were not detected. "
+            "Use <b>Install SLSsteam</b> below (DroidDeck-safe installer). Until aarch64 SLS is installed, "
+            "ASSella can still use <b>Direct Depot Downloads</b> and local manifest management."
         )
         arm_badge.setStyleSheet(
             "background-color: rgba(64, 150, 255, 0.15); border: 1px solid rgba(64, 150, 255, 0.4); "
+            "border-radius: 6px; padding: 8px; color: #E0E0E0; font-size: 8.5pt;"
+        )
+        arm_badge.setWordWrap(True)
+        int_layout.addWidget(arm_badge)
+    elif is_arm64() and is_droiddeck():
+        arm_badge = QLabel(
+            "ℹ️ <b>DroidDeck (ARM64)</b>: Start Steam with SLS injection using "
+            "<code>steam-sls</code> (~/.local/bin/steam-sls) before native Steam handoff."
+        )
+        arm_badge.setStyleSheet(
+            "background-color: rgba(64, 200, 120, 0.12); border: 1px solid rgba(64, 200, 120, 0.35); "
             "border-radius: 6px; padding: 8px; color: #E0E0E0; font-size: 8.5pt;"
         )
         arm_badge.setWordWrap(True)
@@ -284,7 +319,7 @@ def create_sls_tab(dialog) -> QWidget:
     if sys.platform == "linux":
         wrapper_name = "SLSsteam"
         dialog.sls_mode_checkbox = None
-        if not is_arm64():
+        if not is_arm64() or (sls_binaries_present() and sls_binaries_compatible()):
             linux_hint = QLabel(
                 "SLSsteam is enabled automatically for Steam library installs on Linux."
             )
@@ -466,9 +501,9 @@ def create_sls_tab(dialog) -> QWidget:
                     dialog,
                     "SLSsteam Update Available",
                     "A newer SLSsteam build is available.\n\n"
-                    "Would you like to run the Headcrab setup script to update SLSsteam now?\n"
-                    "  curl -fsSL headcrab.pages.dev | bash\n\n"
-                    "ASSella will close while Headcrab runs in the terminal.",
+                    "Would you like to run the SLSsteam setup script now?\n"
+                    f"  {_sls_install_shell_command().split(';')[0]}\n\n"
+                    "ASSella will close while the installer runs in the terminal.",
                     ThemedMessageBox.StandardButton.Yes | ThemedMessageBox.StandardButton.No,
                     ThemedMessageBox.StandardButton.Yes
                 )
@@ -486,7 +521,14 @@ def create_sls_tab(dialog) -> QWidget:
         # ── Headcrab Button Placement ────────────────────────────────────
         headcrab_btn = QPushButton()
         def update_headcrab_btn_text():
-            if is_headcrab_installed():
+            from utils.helpers import is_droiddeck
+            if is_droiddeck():
+                if is_headcrab_installed() or sls_binaries_present():
+                    headcrab_btn.setText("Reinstall SLSsteam")
+                else:
+                    headcrab_btn.setText("Install SLSsteam")
+                headcrab_btn.setToolTip("Run the DroidDeck-safe SLS installer (no Headcrab Steam updater)")
+            elif is_headcrab_installed():
                 headcrab_btn.setText("Rerun Headcrab Setup")
                 headcrab_btn.setToolTip("Re-run the Headcrab setup script (curl -fsSL headcrab.pages.dev | bash)")
             else:

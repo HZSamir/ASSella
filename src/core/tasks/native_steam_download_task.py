@@ -120,14 +120,22 @@ class NativeSteamDownloadTask(QObject):
         # 1. Preflight checks
         self.progress.emit("[Native Steam] Checking prerequisites...")
 
-        if not self._check_slssteam_active():
-            msg = (
-                "Steam is not running with SLSsteam active. "
-                "Please start Steam first, then try again."
-            )
-            self.progress.emit(f"[Native Steam] ERROR: {msg}")
-            self.error.emit((RuntimeError, msg, None))
-            return
+        try:
+            from core.native_steam.sls_preflight import check_sls_ready_for_handoff
+            sls_ok, sls_msg = check_sls_ready_for_handoff()
+            if not sls_ok:
+                self.progress.emit(f"[Native Steam] ERROR: {sls_msg}")
+                self.error.emit((RuntimeError, sls_msg, None))
+                return
+        except Exception:
+            if not self._check_slssteam_active():
+                msg = (
+                    "Steam is not running with SLSsteam active. "
+                    "Please start Steam first, then try again."
+                )
+                self.progress.emit(f"[Native Steam] ERROR: {msg}")
+                self.error.emit((RuntimeError, msg, None))
+                return
 
         sls_config_dir = self._get_config_dir()
         if not sls_config_dir:
@@ -367,6 +375,11 @@ class NativeSteamDownloadTask(QObject):
 
     def _check_slssteam_active(self) -> bool:
         """Check if SLSsteam.so is loaded in a running Steam process."""
+        try:
+            from core.native_steam.sls_preflight import is_sls_injected_steam_running
+            return is_sls_injected_steam_running()
+        except Exception:
+            pass
         try:
             for pid_dir in os.listdir("/proc"):
                 if not pid_dir.isdigit():

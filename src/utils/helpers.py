@@ -80,6 +80,34 @@ def is_arm64() -> bool:
     return platform.machine().lower() in ("aarch64", "arm64", "armv8b", "armv8l")
 
 
+def is_droiddeck() -> bool:
+    """Check if the host is DroidDeck desktop (ARM Linux under proot).
+
+    Can be simulated via ASSELLA_FORCE_DROIDDECK=1.
+    """
+    if os.environ.get("ASSELLA_FORCE_DROIDDECK") in ("1", "true", "True"):
+        return True
+    if os.environ.get("DROIDDECK_VERSION") or os.environ.get("DROIDDECK_ROOT"):
+        return True
+    try:
+        for p in ("/etc/os-release", "/usr/lib/os-release"):
+            if os.path.exists(p):
+                with open(p, "r", encoding="utf-8") as f:
+                    content = f.read().lower()
+                    if "droiddeck" in content:
+                        return True
+    except Exception:
+        pass
+    try:
+        with open("/proc/1/cmdline", "rb") as f:
+            if b"proot" in f.read().replace(b"\x00", b" "):
+                if is_arm64():
+                    return True
+    except Exception:
+        pass
+    return False
+
+
 def is_armada_os() -> bool:
     """Check if the current host is running Armada OS.
 
