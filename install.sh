@@ -18,6 +18,8 @@ ASSELLA_INSTALL_BRANCH="${ASSELLA_INSTALL_BRANCH:-beta}"
 ASSELLA_RAW_BASE="https://raw.githubusercontent.com/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}"
 ASSELLA_API_RELEASES="https://api.github.com/repos/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}/releases"
 ASSELLA_RELEASES_BASE="https://github.com/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}/releases/download"
+# Bump when changing installer behavior (visible in logs to confirm curl fetched latest script)
+ASSELLA_INSTALLER_REV="2026-03-20-no-git-tarball"
 
 # Terminal Colors & Styling (respect NO_COLOR and non-interactive TTYs)
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -157,6 +159,7 @@ detect_arm64_platform() {
     NO_SUDO=false
     if [[ "$IS_DROIDDECK" = true ]]; then
         NO_SUDO=true
+        ASSELLA_FORCE_NO_GIT=1
     elif ! command -v sudo &>/dev/null; then
         NO_SUDO=true
     fi
@@ -342,6 +345,7 @@ resolve_python3_for_venv() {
 }
 
 arm64_can_use_git() {
+    # Git is optional on ARM64; tarball fetch works without it (required on DroidDeck).
     if [[ "${ASSELLA_FORCE_NO_GIT:-}" == "1" ]] || [[ "${IS_DROIDDECK:-false}" = true ]]; then
         return 1
     fi
@@ -389,17 +393,12 @@ ensure_arm64_prereqs() {
     for cmd in curl tar; do
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
     done
-    if arm64_can_use_git; then
-        command -v git &>/dev/null || missing+=("git")
-    fi
     if ! command -v python3 &>/dev/null && ! resolve_python3_for_venv &>/dev/null; then
         missing+=("python3")
     fi
     if ((${#missing[@]} > 0)); then
         echo -e "${RED}[ERROR] Missing required tools: ${missing[*]}${NC}" >&2
-        if [[ " ${missing[*]} " == *" git "* ]]; then
-            echo -e "${YELLOW}       On DroidDeck, git is not required — use: curl ... | bash -s -- --droiddeck -y${NC}" >&2
-        fi
+        echo -e "${YELLOW}       ARM64/DroidDeck needs curl, tar, and python3 — not git.${NC}" >&2
         return 1
     fi
     if ! python3_version_ok; then
@@ -667,7 +666,8 @@ install_slssteam_minimal() {
 }
 
 do_install_arm64_source() {
-    echo -e "\n${YELLOW}[INFO] Installing ASSella (ARM64 source build)...${NC}"
+    echo -e "\n${CYAN}[INFO] ASSella installer rev: ${ASSELLA_INSTALLER_REV}${NC}"
+    echo -e "${YELLOW}[INFO] Installing ASSella (ARM64 source build)...${NC}"
     mkdir -p "$INSTALL_DESTINATION"
     check_disk_space "$INSTALL_DESTINATION" || return 1
     ensure_arm64_prereqs || return 1
@@ -1587,10 +1587,29 @@ interactive_menu() {
     done
 }
 
+# Apply flags that must be set before detect_distro / prereq checks.
+preparse_installer_flags() {
+    local arg
+    for arg in "$@"; do
+        case "$arg" in
+            --droiddeck)
+                IS_DROIDDECK=true
+                IS_ARM64=true
+                NO_SUDO=true
+                ASSELLA_FORCE_NO_GIT=1
+                ;;
+            --install|-i|--yes|-y|--sls-only|--skip-sls|--no-pip)
+                ;;
+        esac
+    done
+}
+
 # ------------------------------------------------------------------------------
 #  10. CLI Execution Entry Point
 # ------------------------------------------------------------------------------
 main() {
+    preparse_installer_flags "$@"
+
     detect_distro
     check_fuse_status
     check_headcrab_status
@@ -1604,7 +1623,9 @@ main() {
         case "$1" in
             --droiddeck)
                 IS_DROIDDECK=true
+                IS_ARM64=true
                 NO_SUDO=true
+                ASSELLA_FORCE_NO_GIT=1
                 ;;
             --skip-sls)
                 SKIP_SLS=true
