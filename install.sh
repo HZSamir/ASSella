@@ -19,7 +19,10 @@ ASSELLA_RAW_BASE="https://raw.githubusercontent.com/${ASSELLA_GH_OWNER}/${ASSELL
 ASSELLA_API_RELEASES="https://api.github.com/repos/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}/releases"
 ASSELLA_RELEASES_BASE="https://github.com/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}/releases/download"
 # Bump when changing installer behavior (visible in logs to confirm curl fetched latest script)
-ASSELLA_INSTALLER_REV="2026-03-20-no-git-tarball"
+ASSELLA_INSTALLER_REV="2026-03-20-pip-no-git"
+# Pinned VCS deps (must match requirements.in) — installed via zip when git is unavailable
+ASSELLA_VDF_GIT_ARCHIVE="https://github.com/solsticegamestudios/vdf/archive/refs/tags/v4.0.zip"
+ASSELLA_STEAM_GIT_ARCHIVE="https://github.com/solsticegamestudios/steam/archive/1373e885f26bb636225443787f54d4082283e5f3.zip"
 
 # Terminal Colors & Styling (respect NO_COLOR and non-interactive TTYs)
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -490,6 +493,45 @@ ensure_arm64_dotnet() {
     rm -f "$ds"
 }
 
+arm64_pip_needs_gitless_vcs() {
+    if [[ "${ASSELLA_FORCE_NO_GIT:-}" == "1" ]] || [[ "${IS_DROIDDECK:-false}" = true ]]; then
+        return 0
+    fi
+    if ! command -v git &>/dev/null; then
+        return 0
+    fi
+    return 1
+}
+
+install_arm64_pip_dependencies() {
+    local venv_py="$1"
+    local req_file="$ARM64_SRC_TREE/requirements.txt"
+    local filtered_req="${TMP_DIR:-/tmp}/requirements-arm64-no-vcs.txt"
+
+    if ! arm64_pip_needs_gitless_vcs; then
+        "$venv_py" -m pip install -r "$req_file" -q
+        return 0
+    fi
+
+    echo -e "${YELLOW}[INFO] Installing steam/vdf from GitHub zip archives (git not used)...${NC}"
+    # vdf before steam; steam's metadata may reference git for vdf if vdf is missing.
+    if ! "$venv_py" -m pip install --no-cache-dir "$ASSELLA_VDF_GIT_ARCHIVE"; then
+        echo -e "${RED}[ERROR] Failed to pip install vdf from GitHub archive.${NC}" >&2
+        return 1
+    fi
+    if ! "$venv_py" -m pip install --no-cache-dir "$ASSELLA_STEAM_GIT_ARCHIVE"; then
+        echo -e "${RED}[ERROR] Failed to pip install steam from GitHub archive.${NC}" >&2
+        return 1
+    fi
+
+    grep -viE '^[[:space:]]*(steam|vdf)[[:space:]]+@ git\+' "$req_file" > "$filtered_req" || true
+    if [ ! -s "$filtered_req" ]; then
+        echo -e "${RED}[ERROR] Could not build filtered requirements file.${NC}" >&2
+        return 1
+    fi
+    "$venv_py" -m pip install -r "$filtered_req" -q
+}
+
 ensure_arm64_venv() {
     local py
     py="$(resolve_python3_for_venv)" || return 1
@@ -504,7 +546,7 @@ ensure_arm64_venv() {
     fi
     echo -e "${YELLOW}[INFO] Installing Python dependencies (this may take several minutes)...${NC}"
     "$venv/bin/python3" -m pip install --upgrade pip wheel -q
-    "$venv/bin/python3" -m pip install -r "$ARM64_SRC_TREE/requirements.txt" -q
+    install_arm64_pip_dependencies "$venv/bin/python3"
 }
 
 write_run_assella_launcher() {
