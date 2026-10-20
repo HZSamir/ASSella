@@ -19,7 +19,7 @@ ASSELLA_RAW_BASE="https://raw.githubusercontent.com/${ASSELLA_GH_OWNER}/${ASSELL
 ASSELLA_API_RELEASES="https://api.github.com/repos/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}/releases"
 ASSELLA_RELEASES_BASE="https://github.com/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}/releases/download"
 # Bump when changing installer behavior (visible in logs to confirm curl fetched latest script)
-ASSELLA_INSTALLER_REV="2026-03-20-sls-path-v4"
+ASSELLA_INSTALLER_REV="2026-03-20-7zz-stdout-v5"
 # Pinned VCS deps (must match requirements.in) — installed via zip when git is unavailable
 ASSELLA_VDF_GIT_ARCHIVE="https://github.com/solsticegamestudios/vdf/archive/refs/tags/v4.0.zip"
 ASSELLA_STEAM_GIT_ARCHIVE="https://github.com/solsticegamestudios/steam/archive/1373e885f26bb636225443787f54d4082283e5f3.zip"
@@ -670,28 +670,36 @@ resolve_slssteam_7z_tool() {
 
     local ver="2409"
     local url="https://github.com/ip7z/7zip/releases/download/24.09/7z${ver}-linux-${zarch}.tar.xz"
-    echo -e "${YELLOW}[INFO] Downloading portable 7zz (no system p7zip detected)...${NC}"
+    echo -e "${YELLOW}[INFO] Downloading portable 7zz (no system p7zip detected)...${NC}" >&2
     mkdir -p "$tools"
     local tarball
     tarball="$(mktemp -t assella-7zz-XXXXXX.tar.xz)"
     if ! curl -fsSL --retry 3 "$url" -o "$tarball"; then
         rm -f "$tarball"
-        echo -e "${RED}[ERROR] Could not download 7zz. Install p7zip (package 7z) and re-run.${NC}" >&2
+        echo -e "${RED}[ERROR] Could not download 7zz from ${url}. Install p7zip (7z) and re-run.${NC}" >&2
         return 1
     fi
     if ! tar -xJf "$tarball" -C "$tools" 7zz 2>/dev/null; then
-        tar -xJf "$tarball" -C "$tools" || {
+        if ! tar -xJf "$tarball" -C "$tools" 2>/dev/null; then
             rm -f "$tarball"
             echo -e "${RED}[ERROR] Failed to unpack portable 7zz.${NC}" >&2
             return 1
-        }
+        fi
     fi
     rm -f "$tarball"
+    if [ ! -x "$bundled" ]; then
+        local found=""
+        found="$(find "$tools" -maxdepth 3 -name '7zz' -type f 2>/dev/null | head -n1)"
+        if [ -n "$found" ]; then
+            cp -a "$found" "$bundled"
+        fi
+    fi
     chmod +x "$bundled" 2>/dev/null || true
     if [ ! -x "$bundled" ]; then
-        echo -e "${RED}[ERROR] Portable 7zz bootstrap failed.${NC}" >&2
+        echo -e "${RED}[ERROR] Portable 7zz bootstrap failed (expected ${bundled}).${NC}" >&2
         return 1
     fi
+    echo -e "${GREEN}[OK] Portable 7zz ready at ${bundled}${NC}" >&2
     printf '%s\n' "$bundled"
 }
 
@@ -700,11 +708,21 @@ extract_slssteam_archive() {
     local dest="$2"
     local tool
     tool="$(resolve_slssteam_7z_tool)" || return 1
+    tool="${tool//$'\n'/}"
+    tool="${tool%%$'\r'*}"
     mkdir -p "$dest"
-    if ! "$tool" x -y "$archive" "-o${dest}" >/dev/null 2>&1; then
-        echo -e "${RED}[ERROR] Failed to extract SLSsteam .7z (using: $tool).${NC}"
+    local extract_log
+    extract_log="$(mktemp -t assella-7z-log-XXXXXX)"
+    if ! "$tool" x -y "$archive" "-o${dest}" >"$extract_log" 2>&1; then
+        echo -e "${RED}[ERROR] Failed to extract SLSsteam .7z (using: ${tool}).${NC}"
+        if [ -s "$extract_log" ]; then
+            echo -e "${YELLOW}[INFO] 7z output:${NC}"
+            sed -n '1,20p' "$extract_log" | sed 's/^/  /'
+        fi
+        rm -f "$extract_log"
         return 1
     fi
+    rm -f "$extract_log"
     return 0
 }
 

@@ -170,7 +170,7 @@ SLS only (reinstall without touching the app):
 curl -fsSL https://raw.githubusercontent.com/HZSamir/ASSella/beta/install.sh | bash -s -- --sls-only
 ```
 
-Confirm the script revision in the log line `ASSella installer rev:` (should be `2026-03-20-sls-path-v4` or newer). Verify binaries (not only `~/.config/SLSsteam/config.yaml`):
+Confirm the script revision in the log line `ASSella installer rev:` (should be `2026-03-20-7zz-stdout-v5` or newer). Verify binaries (not only `~/.config/SLSsteam/config.yaml`):
 
 ```bash
 ls -la ~/.local/share/SLSsteam/SLSsteam.so ~/.local/share/SLSsteam/library-inject.so
