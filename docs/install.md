@@ -184,6 +184,8 @@ steam-sls
 ### DroidDeck limitations
 
 - No `sudo` / full-system `pacman -Syu` — the installer is user-space only.
+- **`git` is not required** on DroidDeck: the installer downloads a GitHub source tarball with `curl` and `tar` only.
+- You need **`curl`**, **`tar`**, and **`python3`** (plus `unzip` or `7z` for SLSsteam install).
 - Upstream `SLSsteam-Any-release.7z` may be **x86_64-only**; native ARM64 Steam needs **aarch64** SLS builds (see [droiddeck-spike.md](./droiddeck-spike.md)). The installer warns when ELF architectures do not match.
 - x86_64 AppImages are not supported on DroidDeck desktop.
 

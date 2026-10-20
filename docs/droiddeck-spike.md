@@ -20,7 +20,7 @@ This document records environment assumptions for ASSella on [DroidDeck](https:/
 ## Tooling prerequisites (user-space)
 
 - `python3` (3.12+ recommended; installer can bootstrap 3.13 standalone on failure)
-- `python3 -m venv`, `curl`, `git`
+- `python3 -m venv`, `curl`, `tar` (source is fetched as a GitHub tarball — **no `git`**)
 - `7z` or `7za` or `bsdtar` for SLSsteam archive extraction
 - User-writable `~/.dotnet` (.NET 9 **linux-arm64** for DepotDownloader)
 

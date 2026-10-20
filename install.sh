@@ -341,16 +341,65 @@ resolve_python3_for_venv() {
     return 1
 }
 
+arm64_can_use_git() {
+    if [[ "${ASSELLA_FORCE_NO_GIT:-}" == "1" ]] || [[ "${IS_DROIDDECK:-false}" = true ]]; then
+        return 1
+    fi
+    command -v git &>/dev/null
+}
+
+download_arm64_source_tarball() {
+    local branch="${ARM64_BRANCH:-$ASSELLA_INSTALL_BRANCH}"
+    local url="https://codeload.github.com/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}/tar.gz/${branch}"
+    local work="${TMP_DIR:-}"
+    if [ -z "$work" ] || [ ! -d "$work" ]; then
+        work="$(mktemp -d -t assella-src-XXXXXX)"
+    fi
+    local tgz="$work/assella-src.tar.gz"
+    local extract_parent="$work/assella-src-extract"
+
+    echo -e "${YELLOW}[INFO] Downloading ASSella source archive (${branch}) via curl...${NC}"
+    if ! curl -fsSL --retry 3 --retry-delay 2 -o "$tgz" "$url"; then
+        echo -e "${RED}[ERROR] Failed to download source tarball from GitHub.${NC}" >&2
+        echo -e "${YELLOW}       URL: $url${NC}" >&2
+        return 1
+    fi
+
+    rm -rf "$extract_parent"
+    mkdir -p "$extract_parent"
+    if ! tar -xzf "$tgz" -C "$extract_parent"; then
+        echo -e "${RED}[ERROR] Failed to extract source archive (need tar + gzip).${NC}" >&2
+        return 1
+    fi
+
+    local topdir
+    topdir="$(find "$extract_parent" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -n1)"
+    if [ -z "$topdir" ] || [ ! -f "$topdir/src/main.py" ]; then
+        echo -e "${RED}[ERROR] Downloaded archive layout was unexpected (missing src/main.py).${NC}" >&2
+        return 1
+    fi
+
+    rm -rf "$ARM64_SRC_TREE"
+    mv "$topdir" "$ARM64_SRC_TREE"
+    echo -e "${GREEN}[OK] Source tree ready at $ARM64_SRC_TREE (no git required).${NC}"
+}
+
 ensure_arm64_prereqs() {
     local missing=()
-    for cmd in curl git; do
+    for cmd in curl tar; do
         command -v "$cmd" &>/dev/null || missing+=("$cmd")
     done
+    if arm64_can_use_git; then
+        command -v git &>/dev/null || missing+=("git")
+    fi
     if ! command -v python3 &>/dev/null && ! resolve_python3_for_venv &>/dev/null; then
         missing+=("python3")
     fi
     if ((${#missing[@]} > 0)); then
         echo -e "${RED}[ERROR] Missing required tools: ${missing[*]}${NC}" >&2
+        if [[ " ${missing[*]} " == *" git "* ]]; then
+            echo -e "${YELLOW}       On DroidDeck, git is not required — use: curl ... | bash -s -- --droiddeck -y${NC}" >&2
+        fi
         return 1
     fi
     if ! python3_version_ok; then
@@ -380,18 +429,24 @@ sync_arm64_source() {
         return 0
     fi
 
-    if [ -d "$ARM64_SRC_TREE/.git" ]; then
-        echo -e "${YELLOW}[INFO] Updating ASSella source ($ARM64_BRANCH)...${NC}"
+    if arm64_can_use_git && [ -d "$ARM64_SRC_TREE/.git" ]; then
+        echo -e "${YELLOW}[INFO] Updating ASSella source ($ARM64_BRANCH) via git...${NC}"
         git -C "$ARM64_SRC_TREE" fetch origin "$ARM64_BRANCH" --depth 1 2>/dev/null || \
             git -C "$ARM64_SRC_TREE" fetch origin "$ARM64_BRANCH"
         git -C "$ARM64_SRC_TREE" checkout "$ARM64_BRANCH"
         git -C "$ARM64_SRC_TREE" pull origin "$ARM64_BRANCH" --ff-only || \
             git -C "$ARM64_SRC_TREE" reset --hard "origin/$ARM64_BRANCH"
-    else
+        return 0
+    fi
+
+    if arm64_can_use_git; then
         echo -e "${YELLOW}[INFO] Cloning ASSella ($ARM64_BRANCH) into $ARM64_SRC_TREE...${NC}"
         rm -rf "$ARM64_SRC_TREE"
         git clone --branch "$ARM64_BRANCH" --depth 1 "$ARM64_REPO_URL" "$ARM64_SRC_TREE"
+        return 0
     fi
+
+    download_arm64_source_tarball
 }
 
 fetch_arm64_deps_dlls() {
@@ -1691,7 +1746,7 @@ main() {
             echo "  --droiddeck      Force DroidDeck profile (ARM64 source install)"
             echo "  --sls-only       Install SLSsteam without Headcrab Steam updater"
             echo "  --skip-sls       Skip SLS install during ARM64 setup"
-            echo "  --no-pip         Skip pip install on ARM64 update (git pull only)"
+            echo "  --no-pip         Skip pip install on ARM64 update (refresh source only)"
             echo ""
             echo "Execution Options:"
             echo "  (no args)        Interactive wizard (prompts for Headcrab & ASSella)"
