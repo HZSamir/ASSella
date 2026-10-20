@@ -10,6 +10,14 @@ fi
 # ==============================================================================
 #                      ASSella Installer
 # ==============================================================================
+# Fork / mirror overrides (optional):
+#   ASSELLA_GH_OWNER, ASSELLA_GH_REPO, ASSELLA_INSTALL_BRANCH, ASSELLA_ARM64_BRANCH
+ASSELLA_GH_OWNER="${ASSELLA_GH_OWNER:-HZSamir}"
+ASSELLA_GH_REPO="${ASSELLA_GH_REPO:-ASSella}"
+ASSELLA_INSTALL_BRANCH="${ASSELLA_INSTALL_BRANCH:-beta}"
+ASSELLA_RAW_BASE="https://raw.githubusercontent.com/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}"
+ASSELLA_API_RELEASES="https://api.github.com/repos/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}/releases"
+ASSELLA_RELEASES_BASE="https://github.com/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}/releases/download"
 
 # Terminal Colors & Styling (respect NO_COLOR and non-interactive TTYs)
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -65,8 +73,8 @@ SKIP_SLS=false
 SLS_ONLY=false
 ARM64_NO_PIP=false
 ARM64_SRC_TREE=""
-ARM64_REPO_URL="https://github.com/niwia/ASSella.git"
-ARM64_BRANCH="arm64"
+ARM64_REPO_URL="https://github.com/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}.git"
+ARM64_BRANCH="${ASSELLA_ARM64_BRANCH:-$ASSELLA_INSTALL_BRANCH}"
 PLUGINS_ZIP_URL="https://github.com/ciscosweater/enter-the-wired/releases/download/latest/plugins-deps.zip"
 RUN_ASSella_LAUNCHER="$INSTALL_DESTINATION/run-assella.sh"
 STEAM_SLS_WRAPPER="$HOME/.local/bin/steam-sls"
@@ -276,8 +284,8 @@ detect_channel() {
         return 0
     fi
     if [[ "${IS_ARM64:-false}" = true ]]; then
-        TARGET_CHANNEL="arm64"
-        ARM64_BRANCH="arm64"
+        TARGET_CHANNEL="${TARGET_CHANNEL:-arm64}"
+        ARM64_BRANCH="${ASSELLA_ARM64_BRANCH:-$ASSELLA_INSTALL_BRANCH}"
         return 0
     fi
     # Default to beta channel for beta branch installer
@@ -389,7 +397,7 @@ sync_arm64_source() {
 fetch_arm64_deps_dlls() {
     local deps_dir="$ARM64_SRC_TREE/src/deps"
     local branch="${ARM64_BRANCH:-arm64}"
-    local base="https://raw.githubusercontent.com/niwia/ASSella/${branch}/src/deps"
+    local base="${ASSELLA_RAW_BASE}/${branch}/src/deps"
     mkdir -p "$deps_dir"
     local dlls=(
         DepotDownloader.dll
@@ -649,7 +657,7 @@ EOL
         cp -a "$icon_src" "$PRIMARY_ICON_PATH"
     else
         curl -sL -o "$PRIMARY_ICON_PATH" \
-            "https://raw.githubusercontent.com/niwia/ASSella/${ARM64_BRANCH}/src/res/logo/icon.png" || true
+            "${ASSELLA_RAW_BASE}/${ARM64_BRANCH}/src/res/logo/icon.png" || true
     fi
 
     if command -v update-desktop-database &>/dev/null; then
@@ -843,7 +851,7 @@ get_latest_github_version() {
     LATEST_URL=""
     detect_channel
 
-    REL_JSON=$(fetch_github_json "https://api.github.com/repos/niwia/ASSella/releases" || true)
+    REL_JSON=$(fetch_github_json "$ASSELLA_API_RELEASES" || true)
     if [ -n "$REL_JSON" ]; then
         if command -v python3 &>/dev/null; then
             PARSED=$(echo "$REL_JSON" | python3 -c '
@@ -900,13 +908,13 @@ except Exception:
     if [ -z "$LATEST_URL" ]; then
         if [ "$TARGET_CHANNEL" = "canary" ]; then
             LATEST_VER="v3.0Release_candidate111026001"
-            LATEST_URL="https://github.com/niwia/ASSella/releases/download/v3.0Release_candidate111026001/assella3.0canary.appimage"
+            LATEST_URL="${ASSELLA_RELEASES_BASE}/v3.0Release_candidate111026001/assella3.0canary.appimage"
         elif [ "$TARGET_CHANNEL" = "stable" ]; then
             LATEST_VER="v2.6.5"
-            LATEST_URL="https://github.com/niwia/ASSella/releases/download/v2.6.5/ASSella.AppImage"
+            LATEST_URL="${ASSELLA_RELEASES_BASE}/v2.6.5/ASSella.AppImage"
         else
             LATEST_VER="v2.7.0beta"
-            LATEST_URL="https://github.com/niwia/ASSella/releases/download/v2.7.0beta/ASSella.AppImage"
+            LATEST_URL="${ASSELLA_RELEASES_BASE}/v2.7.0beta/ASSella.AppImage"
         fi
     fi
 }
@@ -1196,7 +1204,7 @@ EOL
     # Application Icon Download
     echo -e "${YELLOW}[INFO] Applying application icon...${NC}"
     mkdir -p "$ICON_DIR"
-    curl -sL -o "$PRIMARY_ICON_PATH" "https://raw.githubusercontent.com/niwia/ASSella/main/src/res/logo/icon.png" || true
+    curl -sL -o "$PRIMARY_ICON_PATH" "${ASSELLA_RAW_BASE}/${ASSELLA_INSTALL_BRANCH}/src/res/logo/icon.png" || true
     if [ -f "$LEGACY_ICON_PATH" ] || [ -L "$LEGACY_ICON_PATH" ]; then
         ln -sf assella.png "$LEGACY_ICON_PATH"
     fi

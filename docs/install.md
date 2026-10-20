@@ -125,12 +125,12 @@ Let the installation finish. You can now proceed to Step 5 to install ASSella.
 
 ## 5. Install ASSella
 
-Official releases: **[ASSella GitHub Releases](https://github.com/niwia/ASSella/releases)**
+Official releases: **[ASSella GitHub Releases](https://github.com/HZSamir/ASSella/releases)**
 
 ::: code-group
 
 ```bash [Option A (Recommended) — One-Line Installer]
-curl -fsSL https://raw.githubusercontent.com/niwia/ASSella/beta/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/HZSamir/ASSella/beta/install.sh | bash
 ```
 
 ```bash [Option B — Manual AppImage]
@@ -161,13 +161,13 @@ chmod +x ASSella.AppImage
 ### Install ASSella + SLSsteam
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/niwia/ASSella/arm64/install.sh | bash -s -- --droiddeck -y
+curl -fsSL https://raw.githubusercontent.com/HZSamir/ASSella/beta/install.sh | bash -s -- --droiddeck -y
 ```
 
 SLS only (reinstall without touching the app):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/niwia/ASSella/arm64/install.sh | bash -s -- --sls-only
+curl -fsSL https://raw.githubusercontent.com/HZSamir/ASSella/beta/install.sh | bash -s -- --sls-only
 ```
 
 ### After install

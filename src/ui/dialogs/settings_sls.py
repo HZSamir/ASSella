@@ -228,7 +228,7 @@ def _sls_install_shell_command() -> str:
     from utils.helpers import is_droiddeck
     if is_droiddeck():
         return (
-            "curl -fsSL https://raw.githubusercontent.com/niwia/ASSella/arm64/install.sh | "
+            "curl -fsSL https://raw.githubusercontent.com/HZSamir/ASSella/beta/install.sh | "
             "bash -s -- --sls-only; echo; echo '--- Done. Press Enter to close ---'; read _"
         )
     return (
@@ -255,7 +255,7 @@ def run_headcrab(dialog, callback=None) -> None:
     verb = "re-run" if already else "install"
     if is_droiddeck():
         install_line = (
-            "  curl -fsSL https://raw.githubusercontent.com/niwia/ASSella/arm64/install.sh | "
+            "  curl -fsSL https://raw.githubusercontent.com/HZSamir/ASSella/beta/install.sh | "
             "bash -s -- --sls-only"
         )
         title = "Install SLSsteam (DroidDeck)"
