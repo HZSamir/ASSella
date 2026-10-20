@@ -19,7 +19,7 @@ ASSELLA_RAW_BASE="https://raw.githubusercontent.com/${ASSELLA_GH_OWNER}/${ASSELL
 ASSELLA_API_RELEASES="https://api.github.com/repos/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}/releases"
 ASSELLA_RELEASES_BASE="https://github.com/${ASSELLA_GH_OWNER}/${ASSELLA_GH_REPO}/releases/download"
 # Bump when changing installer behavior (visible in logs to confirm curl fetched latest script)
-ASSELLA_INSTALLER_REV="2026-03-20-pip-no-git"
+ASSELLA_INSTALLER_REV="2026-03-20-pip-no-git-v2"
 # Pinned VCS deps (must match requirements.in) — installed via zip when git is unavailable
 ASSELLA_VDF_GIT_ARCHIVE="https://github.com/solsticegamestudios/vdf/archive/refs/tags/v4.0.zip"
 ASSELLA_STEAM_GIT_ARCHIVE="https://github.com/solsticegamestudios/steam/archive/1373e885f26bb636225443787f54d4082283e5f3.zip"
@@ -514,12 +514,12 @@ install_arm64_pip_dependencies() {
     fi
 
     echo -e "${YELLOW}[INFO] Installing steam/vdf from GitHub zip archives (git not used)...${NC}"
-    # vdf before steam; steam's metadata may reference git for vdf if vdf is missing.
+    # vdf first. steam's pyproject still lists vdf as git+https; --no-deps avoids pip invoking git.
     if ! "$venv_py" -m pip install --no-cache-dir "$ASSELLA_VDF_GIT_ARCHIVE"; then
         echo -e "${RED}[ERROR] Failed to pip install vdf from GitHub archive.${NC}" >&2
         return 1
     fi
-    if ! "$venv_py" -m pip install --no-cache-dir "$ASSELLA_STEAM_GIT_ARCHIVE"; then
+    if ! "$venv_py" -m pip install --no-cache-dir --no-deps "$ASSELLA_STEAM_GIT_ARCHIVE"; then
         echo -e "${RED}[ERROR] Failed to pip install steam from GitHub archive.${NC}" >&2
         return 1
     fi
